@@ -10,6 +10,11 @@ class GPTClientError(Exception):
     pass
 
 
+class RateLimitError(GPTClientError):
+    """Ошибка превышения лимита запросов (429)."""
+    pass
+
+
 class GPTClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -44,6 +49,8 @@ class GPTClient:
         async with self.session.post(API_URL, json=payload, headers=headers) as resp:
             if resp.status != 200:
                 text = await resp.text()
+                if resp.status == 429:
+                    raise RateLimitError(f"Groq API rate limit exceeded (429): {text}")
                 raise GPTClientError(f"Groq API error {resp.status}: {text}")
 
             async for line in resp.content:

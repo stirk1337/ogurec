@@ -70,6 +70,10 @@ class PresenceGameCog(commands.Cog):
             activity=activity,
         )
 
+        # Обновляем текущую игру в ConversationCog
+        if self.conversation_cog:
+            self.conversation_cog.current_game = game_name
+
         self.game_post_counter += 1
         trigger = random.randint(1, 50) == 10 or self.game_post_counter >= GAME_POST_GUARANTEE
 
@@ -109,8 +113,17 @@ class PresenceGameCog(commands.Cog):
 
         # Формируем информацию об игре и пользователе
         hours = None
+        game_description = None
         if game_info:
             hours = game_info.get("playtime_forever", 0) / 60  # Конвертируем минуты в часы
+            # Получаем описание игры из Steam Store API
+            appid = game_info.get("appid")
+            if appid:
+                try:
+                    game_description = await self.steam_client.get_game_description(appid)
+                except Exception:
+                    # Если не удалось получить описание, продолжаем без него
+                    pass
 
         user_mention = None
         if discord_user_id:
@@ -119,14 +132,18 @@ class PresenceGameCog(commands.Cog):
                 user_mention = f"<@{discord_user_id}>"
 
         # Формируем промпт
-        game_prompt = f"Напиши одно предложение о том, что ты идешь играть в {game_name}"
-
         # С шансом 10% обосрать вкус игрока
         roast_taste = random.randint(1, 100) <= 10
 
+        # Начинаем с базового промпта
+        if game_description:
+            game_prompt = f"Напиши сообщение о том, что ты идешь играть в {game_name}. ОБЯЗАТЕЛЬНО опиши игру в своем сообщении, используя эту информацию об игре: {game_description}. Используй описание игры, чтобы рассказать, что это за игра"
+        else:
+            game_prompt = f"Напиши одно предложение о том, что ты идешь играть в {game_name}"
+
         if user_mention:
             if hours is not None:
-                game_prompt += f". Важно: упомяни, что ты взял эту игру из библиотеки пользователя, и что у этого пользователя в этой игре {hours:.1f} часов. Не говори что ты играл столько часов, говори что у пользователя столько часов"
+                game_prompt += f". ОБЯЗАТЕЛЬНО упомяни, что ты взял эту игру из библиотеки пользователя. У этого пользователя в этой игре {hours:.1f} часов - ОБЯЗАТЕЛЬНО упомяни это количество часов в своем сообщении. Не говори что ты играл столько часов, говори что у пользователя столько часов"
                 if roast_taste:
                     game_prompt += ". ОБЯЗАТЕЛЬНО обосри вкус этого игрока - скажи что-то токсичное и развязное про его выбор игр, высмеяй его вкус"
             else:
@@ -140,11 +157,9 @@ class PresenceGameCog(commands.Cog):
 
         try:
             # Генерируем ответ через GPT
-            model = self.conversation_cog._get_channel_model(channel_id)
             content = ""
-            async for chunk in self.conversation_cog.gpt_client.chat_completion(
-                messages=history_with_prompt,
-                model=model,
+            async for chunk in self.conversation_cog._chat_completion_with_rotation(
+                messages=history_with_prompt
             ):
                 content += chunk
                 # Ограничиваем длину (примерно до 300 символов, так как может быть пинг)

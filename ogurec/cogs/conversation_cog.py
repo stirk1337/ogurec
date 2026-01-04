@@ -6,9 +6,10 @@ from typing import Any
 import discord
 from discord import Message, app_commands
 from discord.ext import commands
+from loguru import logger
 
 from ogurec.bot import OgurecBot
-from ogurec.chatgpt import GPTClient
+from ogurec.chatgpt import GPTClient, RateLimitError
 from ogurec.utils import get_random_sticker
 
 MESSAGE_RANDOM_RANGE = 450
@@ -36,6 +37,27 @@ BOT_MOODS = [
     "Пиши как агресивный гопник",
 ]
 
+# Список моделей для ротации при ошибке 429 (в порядке приоритета)
+MODEL_ROTATION = [
+    "qwen/qwen3-32b",  # qwen
+    "openai/gpt-oss-120b",  # chatgpt
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-safeguard-20b",
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-guard-4-12b",
+    "meta-llama/llama-prompt-guard-2-22m",
+    "meta-llama/llama-prompt-guard-2-86m",
+    "moonshotai/kimi-k2-instruct",
+    "moonshotai/kimi-k2-instruct-0905",
+    "allam-2-7b",
+    "canopylabs/orpheus-arabic-saudi",
+    "groq/compound",
+    "groq/compound-mini",
+]
+
 
 class ConversationCog(commands.Cog):
     def __init__(self, bot: OgurecBot, gpt_client: GPTClient):
@@ -46,8 +68,8 @@ class ConversationCog(commands.Cog):
         self.conversation_history: dict[int, dict[str, Any]] = {}
         # Задачи для сброса истории
         self.reset_tasks: dict[int, asyncio.Task] = {}
-        # Модели по каналам: {channel_id: model_name}
-        self.channel_models: dict[int, str] = {}
+        # Текущая игра бота
+        self.current_game: str | None = None
 
     @staticmethod
     def _roll(*values: int, max_value: int) -> bool:
@@ -66,6 +88,10 @@ class ConversationCog(commands.Cog):
         
         if guild_name:
             content += f"Название сервера: {guild_name}. "
+        
+        # Получаем информацию об игре, в которую играет бот (только при создании истории)
+        if self.current_game:
+            content += f"Сейчас ты играешь в: {self.current_game}. "
         
         content += "Ты знаешь эту информацию о сервере, но используй её только иногда, когда это уместно и естественно. Не упоминай дату и название сервера в каждом ответе. "
 
@@ -298,11 +324,7 @@ class ConversationCog(commands.Cog):
 
         try:
             async with message.channel.typing():
-                model = self._get_channel_model(channel_id)
-                async for chunk in self.gpt_client.chat_completion(
-                    messages=history,
-                    model=model,
-                ):
+                async for chunk in self._chat_completion_with_rotation(messages=history):
                     buffer += chunk
 
                     # Редактируем сообщение раз в N символов, чтобы не спамить
@@ -387,9 +409,34 @@ class ConversationCog(commands.Cog):
             await asyncio.sleep(random.randint(1, 4))
             await message.add_reaction(random.choice(message.guild.emojis))
 
-    def _get_channel_model(self, channel_id: int) -> str:
-        """Получить модель для канала или вернуть дефолтную."""
-        return self.channel_models.get(channel_id, "qwen/qwen3-32b")
+    async def _chat_completion_with_rotation(self, messages: list[dict]):
+        """
+        Выполняет запрос к GPT с ротацией моделей при ошибке 429.
+        Пытается использовать модели из MODEL_ROTATION по очереди.
+        """
+        last_error = None
+
+        for model in MODEL_ROTATION:
+            try:
+                async for chunk in self.gpt_client.chat_completion(messages=messages, model=model):
+                    yield chunk
+                # Если дошли сюда, значит запрос успешен
+                logger.info(f"Success GPT API request with model {model}")
+                return
+            except RateLimitError as e:
+                # При ошибке 429 пробуем следующую модель
+                last_error = e
+
+                continue
+            except Exception as e:
+                # При других ошибках пробуем следующую модель
+                logger.exception("429 error")
+                last_error = e
+                continue
+        
+        # Если все модели вернули ошибку, пробрасываем последнюю
+        if last_error:
+            raise last_error
 
     @app_commands.command(description="Сбросить историю чата для этого канала")
     async def reset_history(self, interaction: discord.Interaction):
@@ -406,74 +453,6 @@ class ConversationCog(commands.Cog):
             del self.reset_tasks[channel_id]
 
         await interaction.response.send_message("✅ История чата сброшена!", ephemeral=True)
-
-    @app_commands.command(description="Изменить модель GPT для этого канала")
-    @app_commands.describe(model="Модель для использования")
-    @app_commands.choices(
-        model=[
-            app_commands.Choice(name="GPT OSS 120B", value="openai/gpt-oss-120b"),
-            app_commands.Choice(name="GPT OSS 20B", value="openai/gpt-oss-20b"),
-            app_commands.Choice(name="GPT OSS Safeguard 20B", value="openai/gpt-oss-safeguard-20b"),
-            app_commands.Choice(name="Qwen 3 32B", value="qwen/qwen3-32b"),
-            app_commands.Choice(name="Llama 3.1 8B Instant", value="llama-3.1-8b-instant"),
-            app_commands.Choice(name="Llama 3.3 70B Versatile", value="llama-3.3-70b-versatile"),
-            app_commands.Choice(name="Llama 4 Maverick 17B", value="meta-llama/llama-4-maverick-17b-128e-instruct"),
-            app_commands.Choice(name="Llama 4 Scout 17B", value="meta-llama/llama-4-scout-17b-16e-instruct"),
-            app_commands.Choice(name="Llama Guard 4 12B", value="meta-llama/llama-guard-4-12b"),
-            app_commands.Choice(name="Llama Prompt Guard 2 22M", value="meta-llama/llama-prompt-guard-2-22m"),
-            app_commands.Choice(name="Llama Prompt Guard 2 86M", value="meta-llama/llama-prompt-guard-2-86m"),
-            app_commands.Choice(name="Kimi K2 Instruct", value="moonshotai/kimi-k2-instruct"),
-            app_commands.Choice(name="Kimi K2 Instruct 0905", value="moonshotai/kimi-k2-instruct-0905"),
-            app_commands.Choice(name="Allam 2 7B", value="allam-2-7b"),
-            app_commands.Choice(name="Orpheus Arabic Saudi", value="canopylabs/orpheus-arabic-saudi"),
-            app_commands.Choice(name="Groq Compound", value="groq/compound"),
-            app_commands.Choice(name="Groq Compound Mini", value="groq/compound-mini"),
-        ]
-    )
-    async def set_model(self, interaction: discord.Interaction, model: str):
-        """Установить модель GPT для текущего канала."""
-        channel_id = interaction.channel.id
-        self.channel_models[channel_id] = model
-
-        model_display_name = self._get_model_display_name(model)
-
-        await interaction.response.send_message(
-            f"✅ Модель для этого канала изменена на: **{model_display_name}**", ephemeral=True
-        )
-
-    def _get_model_display_name(self, model: str) -> str:
-        """Получить отображаемое имя модели."""
-        model_names = {
-            "openai/gpt-oss-120b": "GPT OSS 120B",
-            "openai/gpt-oss-20b": "GPT OSS 20B",
-            "openai/gpt-oss-safeguard-20b": "GPT OSS Safeguard 20B",
-            "qwen/qwen3-32b": "Qwen 3 32B",
-            "llama-3.1-8b-instant": "Llama 3.1 8B Instant",
-            "llama-3.3-70b-versatile": "Llama 3.3 70B Versatile",
-            "meta-llama/llama-4-maverick-17b-128e-instruct": "Llama 4 Maverick 17B",
-            "meta-llama/llama-4-scout-17b-16e-instruct": "Llama 4 Scout 17B",
-            "meta-llama/llama-guard-4-12b": "Llama Guard 4 12B",
-            "meta-llama/llama-prompt-guard-2-22m": "Llama Prompt Guard 2 22M",
-            "meta-llama/llama-prompt-guard-2-86m": "Llama Prompt Guard 2 86M",
-            "moonshotai/kimi-k2-instruct": "Kimi K2 Instruct",
-            "moonshotai/kimi-k2-instruct-0905": "Kimi K2 Instruct 0905",
-            "allam-2-7b": "Allam 2 7B",
-            "canopylabs/orpheus-arabic-saudi": "Orpheus Arabic Saudi",
-            "groq/compound": "Groq Compound",
-            "groq/compound-mini": "Groq Compound Mini",
-        }
-        return model_names.get(model, model)
-
-    @app_commands.command(description="Показать текущую модель для этого канала")
-    async def get_model(self, interaction: discord.Interaction):
-        """Показать текущую модель GPT для канала."""
-        channel_id = interaction.channel.id
-        model = self._get_channel_model(channel_id)
-        model_display_name = self._get_model_display_name(model)
-
-        await interaction.response.send_message(
-            f"Текущая модель для этого канала: **{model_display_name}**", ephemeral=True
-        )
 
     @commands.Cog.listener()
     async def on_message(self, message: Message):
