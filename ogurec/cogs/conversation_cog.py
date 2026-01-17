@@ -88,30 +88,34 @@ class ConversationCog(commands.Cog):
         else:
             return f"<:{emoji.name}:{emoji.id}>"
 
-    def _get_user_info_for_gpt(self, user) -> str:
+    def _get_user_info_for_gpt(self, user, guild=None) -> str:
         """Получить информацию о пользователе для GPT."""
-        if not user:
-            return ""
-        
         info_parts = []
-        
+
         # Основная информация
         info_parts.append(f"Пользователь: {user.display_name} (никнейм: {user.name})")
-        
+
         # Роли пользователя (кроме @everyone)
         roles = [role.name for role in user.roles if role.name != "@everyone" and not role.is_bot_managed()]
         if roles:
             info_parts.append(f"Роли: {', '.join(roles)}")
-        
-        # Активность пользователя (играет, стримит и т.д.)
-        if user.activity:
-            if isinstance(user.activity, discord.Game):
-                info_parts.append(f"Сейчас играет в: {user.activity.name}")
-            elif isinstance(user.activity, discord.Streaming):
-                info_parts.append(f"Стримит: {user.activity.name}")
-            elif isinstance(user.activity, discord.CustomActivity):
-                info_parts.append(f"Кастомный статус: {user.activity.name}")
-        
+
+        # Используем guild.get_member() для получения полной информации об активности
+        member = guild.get_member(user.id)
+
+        # Получаем активности из member.activities
+        activities = member.activities
+        for activity in activities:
+            if isinstance(activity, discord.Game):
+                info_parts.append(f"Сейчас играет в: {activity.name}")
+            elif isinstance(activity, discord.Streaming):
+                info_parts.append(
+                    f"Стримит на {activity.platform}: название стрима: {activity.name} ссылка на стрим {activity.url}")
+            elif isinstance(activity, discord.CustomActivity):
+                info_parts.append(f"Кастомный статус: {activity.name}")
+            elif isinstance(activity, discord.Spotify):
+                info_parts.append(f"Слушает трек Spotify: {activity.title} автора {activity.artist}")
+
         return ". ".join(info_parts)
     
     def _get_mentioned_users_info(self, message: Message) -> str:
@@ -125,7 +129,7 @@ class ConversationCog(commands.Cog):
             if user.bot or user.id == self.bot.user.id:
                 continue
             
-            user_info = self._get_user_info_for_gpt(user)
+            user_info = self._get_user_info_for_gpt(user, message.guild)
             if user_info:
                 mentioned_infos.append(user_info)
         
@@ -136,16 +140,15 @@ class ConversationCog(commands.Cog):
 
     def _get_emojis_system_message(self, guild) -> dict:
         """Создает системное сообщение со списком доступных эмодзи на сервере."""
-        if not guild or not guild.emojis:
-            return None
-
         emoji_list = [self._format_emoji_for_gpt(emoji) for emoji in guild.emojis]
+        random.shuffle(emoji_list)
+        emoji_list = emoji_list[:10]
         emoji_text = ", ".join(emoji_list)
 
         return {
             "role": "system",
             "content": (
-                f"Доступные эмодзи на этом сервере: {emoji_text}. "
+                f"Discord эмодзи ВСЕГДА отправляются в формате <:emoji_name:emoji_id>. Доступные эмодзи на этом discord сервере: {emoji_text}."
             ),
         }
 
@@ -280,7 +283,7 @@ class ConversationCog(commands.Cog):
         history = self._get_channel_history(channel_id)
         
         # Добавляем информацию об авторе сообщения и упомянутых пользователях в одно сообщение
-        author_info = self._get_user_info_for_gpt(message.author)
+        author_info = self._get_user_info_for_gpt(message.author, message.guild)
         mentioned_users_info = self._get_mentioned_users_info(message)
         
         info_parts = []
