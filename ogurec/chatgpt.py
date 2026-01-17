@@ -49,7 +49,7 @@ class GPTClient:
         async with self.session.post(API_URL, json=payload, headers=headers) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                if resp.status == 429:
+                if resp.status in [429, 413]:
                     raise RateLimitError(f"Groq API rate limit exceeded (429): {text}")
                 raise GPTClientError(f"Groq API error {resp.status}: {text}")
 
@@ -64,5 +64,5 @@ class GPTClient:
                     text = delta.get("content")
                     if text:
                         yield text
-                except json.JSONDecodeError:
+                except:
                     continue

@@ -1,5 +1,4 @@
 import random
-import re
 from datetime import timedelta, timezone
 
 from discord import Guild, GuildSticker, Member, Role
@@ -16,13 +15,8 @@ def get_random_formatted_emoji(server: Guild) -> str:
 
 
 def get_random_sticker(server: Guild) -> GuildSticker:
-    return random.choice(server.stickers)
-
-
-def remove_user_mentions(text: str):
-    pattern = r"\<\@\d+\>"
-    return re.sub(pattern, "", text)
-
+    stickers = [sticker for sticker in server.stickers if sticker.available]
+    return random.choice(stickers)
 
 def get_all_users_with_role(server: Guild, role_name: str) -> list[Member]:
     role_id = server.roles[0]

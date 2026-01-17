@@ -18,21 +18,9 @@ MESSAGE_GUARANTEE_LIMIT = 750
 HISTORY_TIMEOUT_MINUTES = 10
 
 BOT_MOODS = [
-    "Пиши как футболист",
-    "Пиши как программист",
     "Пиши как гопник",
     "Пиши с жестким негативом",
     "Пиши как гопник с жестким негативом",
-    "Пиши положительно",
-    "Пиши как политик",
-    "Пиши как ведьмак",
-    "Пиши как геймер",
-    "Пиши как анимешник",
-    "Пиши как военный",
-    "Пиши как полицейский",
-    "Пиши с негативом",
-    "Пиши с жестким негативом",
-    "Пиши как певица",
     "Пиши с негативом",
     "Пиши как агресивный гопник",
 ]
@@ -47,15 +35,8 @@ MODEL_ROTATION = [
     "llama-3.3-70b-versatile",
     "meta-llama/llama-4-maverick-17b-128e-instruct",
     "meta-llama/llama-4-scout-17b-16e-instruct",
-    "meta-llama/llama-guard-4-12b",
-    "meta-llama/llama-prompt-guard-2-22m",
-    "meta-llama/llama-prompt-guard-2-86m",
     "moonshotai/kimi-k2-instruct",
     "moonshotai/kimi-k2-instruct-0905",
-    "allam-2-7b",
-    "canopylabs/orpheus-arabic-saudi",
-    "groq/compound",
-    "groq/compound-mini",
 ]
 
 
@@ -85,15 +66,14 @@ class ConversationCog(commands.Cog):
         
         content = "Ты Discord бот по имени Ogurec. Ты пишешь от 1 до 10 предложений за 1 ответ. "
         content += f"Текущая дата и время: {current_date}. "
-        
-        if guild_name:
-            content += f"Название сервера: {guild_name}. "
+
+        content += f"Название сервера: {guild_name}. "
         
         # Получаем информацию об игре, в которую играет бот (только при создании истории)
         if self.current_game:
             content += f"Сейчас ты играешь в: {self.current_game}. "
         
-        content += "Ты знаешь эту информацию о сервере, но используй её только иногда, когда это уместно и естественно. Не упоминай дату и название сервера в каждом ответе. "
+        content += "Используй информацию о сервере только когда это уместно и естественно."
 
         if include_mood:
             mood = random.choice(BOT_MOODS)
@@ -152,7 +132,7 @@ class ConversationCog(commands.Cog):
         if not mentioned_infos:
             return ""
         
-        return "Упомянутые пользователи в сообщении: " + ". ".join(mentioned_infos) + ". Ты знаешь эту информацию о них. ВАЖНО: Если в сообщении упоминается пользователь и задается вопрос типа 'кто это', 'кто он', 'что за пользователь' и т.д., то вопрос относится к упомянутому пользователю, а не к автору сообщения. Отвечай про упомянутого пользователя, используя информацию о нём."
+        return "Упомянутые пользователи в сообщении: " + ". ".join(mentioned_infos)
 
     def _get_emojis_system_message(self, guild) -> dict:
         """Создает системное сообщение со списком доступных эмодзи на сервере."""
@@ -166,8 +146,6 @@ class ConversationCog(commands.Cog):
             "role": "system",
             "content": (
                 f"Доступные эмодзи на этом сервере: {emoji_text}. "
-                "Ты можешь использовать ТОЛЬКО эти эмодзи в своих ответах. "
-                "НЕ используй обычные Unicode эмодзи, используй только эмодзи с сервера в формате <:name:id> или <a:name:id>."
             ),
         }
 
@@ -301,20 +279,20 @@ class ConversationCog(commands.Cog):
         # Получить историю для этого канала с системными сообщениями
         history = self._get_channel_history(channel_id)
         
-        # Добавляем информацию об авторе сообщения для более персонализированного ответа (100% шанс)
+        # Добавляем информацию об авторе сообщения и упомянутых пользователях в одно сообщение
         author_info = self._get_user_info_for_gpt(message.author)
-        if author_info:
-            author_info_text = f"Тебе пишет пользователь: {author_info}. Ты знаешь эту информацию о пользователе, но используй её только иногда, когда это уместно и естественно. Не упоминай эту информацию в каждом ответе."
-            author_info_message = {"role": "system", "content": author_info_text}
-            # Вставляем перед последним сообщением пользователя
-            history.insert(-1, author_info_message)
-        
-        # Добавляем информацию о всех упомянутых пользователях
         mentioned_users_info = self._get_mentioned_users_info(message)
+        
+        info_parts = []
+        if author_info:
+            info_parts.append(f"Тебе пишет пользователь: {author_info}. Ты знаешь эту информацию о пользователе, но используй её только иногда, когда это уместно и естественно")
         if mentioned_users_info:
-            mentioned_info_message = {"role": "system", "content": mentioned_users_info}
+            info_parts.append(mentioned_users_info)
+        
+        if info_parts:
+            combined_info_message = {"role": "user", "content": " ".join(info_parts)}
             # Вставляем перед последним сообщением пользователя
-            history.insert(-1, mentioned_info_message)
+            history.insert(-1, combined_info_message)
 
         # Отправляем пустое сообщение-плейсхолдер с ответом на сообщение пользователя
         sent_message = await message.channel.send("💬 ...", reference=message)
@@ -324,7 +302,7 @@ class ConversationCog(commands.Cog):
 
         try:
             async with message.channel.typing():
-                async for chunk in self._chat_completion_with_rotation(messages=history):
+                async for chunk in self._chat_completion_with_rotation(messages=history, channel_id=channel_id):
                     buffer += chunk
 
                     # Редактируем сообщение раз в N символов, чтобы не спамить
@@ -348,15 +326,11 @@ class ConversationCog(commands.Cog):
 
                     # С шансом 5% отправить случайный стикер с сервера
                     if message.guild and message.guild.stickers and random.randint(1, 100) <= 25:
-                        try:
-                            await message.channel.send(stickers=[get_random_sticker(message.guild)])
-                        except Exception:
-                            # Игнорируем ошибки при отправке стикера
-                            pass
+                        await message.channel.send(stickers=[get_random_sticker(message.guild)])
 
         except Exception as e:
             # На случай ошибки
-            await sent_message.edit(content=f"❌ Ошибка при генерации ответа: {e}")
+            await sent_message.edit(content=f"Бро, ошибка при генерации ответа: {e}")
 
     async def reply_to_question(self, message: Message) -> bool:
         if self.bot.user.mentioned_in(message) and message.content and message.content[-1] in {"?", "!", "."}:
@@ -409,34 +383,73 @@ class ConversationCog(commands.Cog):
             await asyncio.sleep(random.randint(1, 4))
             await message.add_reaction(random.choice(message.guild.emojis))
 
-    async def _chat_completion_with_rotation(self, messages: list[dict]):
+    def _remove_topmost_non_system_message(self, channel_id: int) -> bool:
+        """
+        Удаляет самое верхнее несистемное сообщение из истории чата.
+        Возвращает True, если сообщение было удалено, False если несистемных сообщений не осталось.
+        """
+        history = self._get_channel_history(channel_id)
+        
+        # Ищем первое несистемное сообщение
+        for i, msg in enumerate(history):
+            if msg.get("role") != "system":
+                history.pop(i)
+                logger.info(f"Removed topmost non-system message from history (channel {channel_id})")
+                return True
+        
+        # Если несистемных сообщений нет
+        return False
+
+    async def _chat_completion_with_rotation(self, messages: list[dict], channel_id: int):
         """
         Выполняет запрос к GPT с ротацией моделей при ошибке 429.
         Пытается использовать модели из MODEL_ROTATION по очереди.
+        Если все модели вернули 429, удаляет верхнее несистемное сообщение и повторяет попытку.
         """
-        last_error = None
-
-        for model in MODEL_ROTATION:
-            try:
-                async for chunk in self.gpt_client.chat_completion(messages=messages, model=model):
-                    yield chunk
-                # Если дошли сюда, значит запрос успешен
-                logger.info(f"Success GPT API request with model {model}")
-                return
-            except RateLimitError as e:
-                # При ошибке 429 пробуем следующую модель
-                last_error = e
-
-                continue
-            except Exception as e:
-                # При других ошибках пробуем следующую модель
-                logger.exception("429 error")
-                last_error = e
-                continue
+        max_retries = 20  # Максимальное количество попыток удаления сообщений
         
-        # Если все модели вернули ошибку, пробрасываем последнюю
+        for retry_attempt in range(max_retries):
+            last_error = None
+            all_429 = True  # Флаг, что все модели вернули 429
+
+            for model in MODEL_ROTATION:
+                try:
+                    async for chunk in self.gpt_client.chat_completion(messages=messages, model=model):
+                        yield chunk
+                    # Если дошли сюда, значит запрос успешен
+                    logger.info(f"Success GPT API request with model {model}")
+                    return
+                except RateLimitError as e:
+                    # При ошибке 429 пробуем следующую модель
+                    last_error = e
+                    continue
+                except Exception as e:
+                    # При других ошибках считаем, что не все модели вернули 429
+                    all_429 = False
+                    last_error = e
+                    logger.exception(f"Non-429 error with model {model}")
+                    continue
+            
+            # Если все модели вернули 429, удаляем верхнее несистемное сообщение и повторяем
+            if all_429 and last_error:
+                if self._remove_topmost_non_system_message(channel_id):
+                    # Обновляем список сообщений после удаления
+                    messages = self._get_channel_history(channel_id)
+                    logger.info(f"Retrying after removing message (attempt {retry_attempt + 1})")
+                    continue
+                else:
+                    # Не осталось несистемных сообщений для удаления
+                    logger.warning("All models returned 429, but no non-system messages to remove")
+                    raise last_error
+            
+            # Если не все модели вернули 429 или это не 429 ошибка, пробрасываем
+            if last_error:
+                raise last_error
+        
+        # Если превысили максимальное количество попыток
         if last_error:
             raise last_error
+        raise Exception("Max retries exceeded without success")
 
     @app_commands.command(description="Сбросить историю чата для этого канала")
     async def reset_history(self, interaction: discord.Interaction):

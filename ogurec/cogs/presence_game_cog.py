@@ -38,19 +38,11 @@ class PresenceGameCog(commands.Cog):
         random_discord_id = random.choice(discord_user_ids)
         steam_id = str(USER_STEAM[random_discord_id])
 
-        try:
-            # Получаем случайную игру из библиотеки пользователя
-            game_info = await self.steam_client.get_random_game_from_user(steam_id)
+        # Получаем случайную игру из библиотеки пользователя
+        game_info = await self.steam_client.get_random_game_from_user(steam_id)
 
-            if not game_info:
-                # Fallback если игры не найдены
-                return None, random_discord_id, "Baldur's Gate 3"
-
-            game_name = game_info.get("name", "Baldur's Gate 3")
-            return game_info, random_discord_id, game_name
-        except Exception:
-            # Fallback при ошибке Steam API
-            return None, random_discord_id, "Baldur's Gate 3"
+        game_name = game_info["name"]
+        return game_info, random_discord_id, game_name
 
     @tasks.loop(hours=1)
     async def update_presence(self):
@@ -94,13 +86,8 @@ class PresenceGameCog(commands.Cog):
             self.game_post_counter = 0
 
     async def _generate_game_message(
-        self, channel, game_name: str, game_info: dict = None, discord_user_id: int = None
-    ) -> str:
+        self, channel, game_name: str, game_info: dict, discord_user_id: int) -> str:
         """Генерирует сообщение про игру через GPT (1 предложение)."""
-        if not self.conversation_cog or not self.conversation_cog.gpt_client:
-            # Fallback на старое сообщение, если GPT недоступен
-            return f"Жёстко иду играть в {game_name}"
-
         channel_id = channel.id
 
         # Получаем историю с системными сообщениями
@@ -111,85 +98,29 @@ class PresenceGameCog(commands.Cog):
             self.conversation_cog.ensure_system_messages(channel_id, channel.guild, False)
             history = self.conversation_cog.get_channel_history(channel_id)
 
-        # Формируем информацию об игре и пользователе
-        hours = None
-        game_description = None
-        if game_info:
-            hours = game_info.get("playtime_forever", 0) / 60  # Конвертируем минуты в часы
-            # Получаем описание игры из Steam Store API
-            appid = game_info.get("appid")
-            if appid:
-                try:
-                    game_description = await self.steam_client.get_game_description(appid)
-                except Exception:
-                    # Если не удалось получить описание, продолжаем без него
-                    pass
+        hours = game_info.get("playtime_forever", 0) / 60  # Конвертируем минуты в часы
 
-        user_mention = None
-        if discord_user_id:
-            user = channel.guild.get_member(discord_user_id)
-            if user:
-                user_mention = f"<@{discord_user_id}>"
+        # Получаем описание игры из Steam Store API
+        appid = game_info.get("appid")
+        game_description = await self.steam_client.get_game_description(appid)
 
         # Формируем промпт
-        # С шансом 10% обосрать вкус игрока
-        roast_taste = random.randint(1, 100) <= 10
+        # С шансом 30% обосрать вкус игрока
+        roast_taste = random.randint(1, 100) <= 30
 
-        # Начинаем с базового промпта
-        if game_description:
-            game_prompt = f"Напиши сообщение о том, что ты идешь играть в {game_name}. ОБЯЗАТЕЛЬНО опиши игру в своем сообщении, используя эту информацию об игре: {game_description}. Используй описание игры, чтобы рассказать, что это за игра"
-        else:
-            game_prompt = f"Напиши одно предложение о том, что ты идешь играть в {game_name}"
+        game_prompt = f"Пингани {f"<@{discord_user_id}>"} и напиши сообщение о том, что ты идешь играть в {game_name}. ОБЯЗАТЕЛЬНО опиши игру в своем сообщении, используя эту информацию об игре: {game_description}. Используй описание игры, чтобы рассказать, что это за игра"
 
-        if user_mention:
-            if hours is not None:
-                game_prompt += f". ОБЯЗАТЕЛЬНО упомяни, что ты взял эту игру из библиотеки пользователя. У этого пользователя в этой игре {hours:.1f} часов - ОБЯЗАТЕЛЬНО упомяни это количество часов в своем сообщении. Не говори что ты играл столько часов, говори что у пользователя столько часов"
-                if roast_taste:
-                    game_prompt += ". ОБЯЗАТЕЛЬНО обосри вкус этого игрока - скажи что-то токсичное и развязное про его выбор игр, высмеяй его вкус"
-            else:
-                game_prompt += ". Упомяни, что ты взял эту игру из библиотеки пользователя"
-                if roast_taste:
-                    game_prompt += ". ОБЯЗАТЕЛЬНО обосри вкус этого игрока - скажи что-то токсичное и развязное про его выбор игр, высмеяй его вкус"
-
-            game_prompt += ". НЕ добавляй пинг пользователя в сообщение"
+        game_prompt += f". ОБЯЗАТЕЛЬНО упомяни, что ты взял эту игру из библиотеки пользователя. У этого пользователя в этой игре {hours:.1f} часов - ОБЯЗАТЕЛЬНО отдельно упомяни что пользователь наиграл {hours:.1f} часов"
+        if roast_taste:
+            game_prompt += ". ОБЯЗАТЕЛЬНО скажи что-то плохое и токсичное про его выбор игр, высмеяй его вкус"
 
         history_with_prompt = history + [{"role": "user", "content": game_prompt}]
 
-        try:
-            # Генерируем ответ через GPT
-            content = ""
-            async for chunk in self.conversation_cog._chat_completion_with_rotation(
-                messages=history_with_prompt
-            ):
-                content += chunk
-                # Ограничиваем длину (примерно до 300 символов, так как может быть пинг)
-                if len(content) > 300:
-                    # Обрезаем до последнего предложения
-                    last_period = content.rfind(".")
-                    last_exclamation = content.rfind("!")
-                    last_question = content.rfind("?")
-                    last_sentence_end = max(last_period, last_exclamation, last_question)
-                    if last_sentence_end > 0:
-                        content = content[: last_sentence_end + 1]
-                    break
+        # Генерируем ответ через GPT
+        content = ""
+        async for chunk in self.conversation_cog._chat_completion_with_rotation(
+            messages=history_with_prompt, channel_id=channel_id
+        ):
+            content += chunk
 
-            # Убираем лишние пробелы
-            content = content.strip()
-
-            # Удаляем все упоминания пользователя из сообщения GPT (если он их добавил)
-            if user_mention:
-                # Удаляем все упоминания пользователя
-                content = content.replace(user_mention, "").strip()
-                # Удаляем лишние пробелы
-                while "  " in content:
-                    content = content.replace("  ", " ")
-                # Добавляем пинг один раз в конце
-                content += f" {user_mention}"
-
-            return content if content else f"Жёстко иду играть в {game_name}"
-        except Exception:
-            # Fallback на старое сообщение при ошибке
-            fallback = f"Жёстко иду играть в {game_name}"
-            if user_mention:
-                fallback += f" {user_mention}"
-            return fallback
+        return content
