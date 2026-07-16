@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     discord_bot_token: str
-    tenor_api_key: str
+    klipy_api_key: str
     gpt_api_key: str
     steam_api_key: str
     prefix: str = "!"
@@ -12,4 +12,6 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="",
+        env_file=".env",
+        env_file_encoding="utf-8",
     )

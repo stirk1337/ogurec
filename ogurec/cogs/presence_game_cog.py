@@ -6,15 +6,15 @@ from discord.ext import commands, tasks
 from ogurec.bot import OgurecBot
 from ogurec.cogs.rebrand.rebrand_users import USER_STEAM
 from ogurec.steam import SteamClient
-from ogurec.tenor import TenorClient
+from ogurec.klipy import KlipyClient
 
 GAME_POST_GUARANTEE = 5
 
 
 class PresenceGameCog(commands.Cog):
-    def __init__(self, bot: OgurecBot, tenor_client: TenorClient, steam_client: SteamClient, conversation_cog=None):
+    def __init__(self, bot: OgurecBot, klipy_client: KlipyClient, steam_client: SteamClient, conversation_cog=None):
         self.bot = bot
-        self.tenor_client = tenor_client
+        self.klipy_client = klipy_client
         self.steam_client = steam_client
         self.conversation_cog = conversation_cog
 
@@ -52,10 +52,12 @@ class PresenceGameCog(commands.Cog):
         if not channel:
             return
 
-        # Получаем случайную игру из библиотеки пользователя
         game_info, discord_user_id, game_name = await self._get_random_game_from_library()
 
-        activity = discord.Activity(name=game_name, type=discord.ActivityType.playing)
+        activity = discord.Activity(
+            name=game_name,
+            type=discord.ActivityType.playing
+        )
 
         await self.bot.change_presence(
             status=random.choice(self.statuses),
@@ -69,19 +71,48 @@ class PresenceGameCog(commands.Cog):
         trigger = random.randint(1, 50) == 10 or self.game_post_counter >= GAME_POST_GUARANTEE
 
         if trigger:
-            # Генерируем сообщение про игру через GPT
-            game_message = await self._generate_game_message(channel, game_name, game_info, discord_user_id)
+            game_message = None
 
-            # Отправляем сгенерированное сообщение
-            await channel.send(game_message)
+            # GPT теперь не ломает отправку GIF
+            try:
+                game_message = await self._generate_game_message(
+                    channel,
+                    game_name,
+                    game_info,
+                    discord_user_id
+                )
 
-            # Сохраняем в историю разговора, если есть conversation_cog
-            if self.conversation_cog:
-                channel_id = channel.id
-                self.conversation_cog.add_assistant_message(channel_id, game_message)
+                await channel.send(game_message)
 
-            gif_url = await self.tenor_client.get_first_gif_url(game_name)
-            await channel.send(gif_url)
+                if self.conversation_cog:
+                    channel_id = channel.id
+                    self.conversation_cog.add_assistant_message(
+                        channel_id,
+                        game_message
+                    )
+
+            except Exception as e:
+                print(f"Ошибка генерации сообщения через GPT: {e}")
+
+                # запасное сообщение если Groq упал
+                game_message = (
+                    f"<@{discord_user_id}> играет в {game_name} 🎮"
+                )
+
+                await channel.send(game_message)
+
+            # GIF отправляется всегда, даже если GPT умер
+            try:
+                gif_url = await self.klipy_client.get_first_gif_url(game_name)
+
+                print(f"GIF: {gif_url}")
+
+                if gif_url:
+                    await channel.send(gif_url)
+
+            except Exception as e:
+                print(f"Ошибка получения GIF: {e}")
+
             self.game_post_counter = 0
 
     async def _generate_game_message(

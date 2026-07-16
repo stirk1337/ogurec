@@ -9,6 +9,7 @@ from discord.ext import commands
 from loguru import logger
 
 from ogurec.bot import OgurecBot
+from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.chatgpt import GPTClient, RateLimitError
 from ogurec.utils import get_random_sticker
 
@@ -41,7 +42,7 @@ MODEL_ROTATION = [
 
 
 class ConversationCog(commands.Cog):
-    def __init__(self, bot: OgurecBot, gpt_client: GPTClient):
+    def __init__(self, bot: OgurecBot, gpt_client: GPTClient, gif_storage: GifStorage):
         self.bot = bot
         self.message_counter = 0
         self.gpt_client = gpt_client
@@ -51,10 +52,24 @@ class ConversationCog(commands.Cog):
         self.reset_tasks: dict[int, asyncio.Task] = {}
         # Текущая игра бота (статус Discord), передаётся в промпт
         self.current_game: str | None = None
-
+        self.gif_storage = gif_storage
     @staticmethod
     def _roll(*values: int, max_value: int) -> bool:
         return random.randint(1, max_value) in values
+    
+    async def save_gifs(self, message):
+        for word in message.content.split():
+            if (
+                word.startswith("https://klipy.com/gifs/")
+                or word.startswith("https://tenor.com/view/")
+                or word.startswith("https://cdn.discordapp.com/")
+                or word.startswith("https://media.discordapp.net/")
+                or word.startswith("https://media.giphy.com/")
+                or word.startswith("https://i.giphy.com/")
+            ):
+                url = word.split("?")[0].rstrip("/")
+
+                await self.gif_storage.add(url)
 
     def _get_base_system_message(self, include_mood: bool = False, guild_name: str = None) -> dict:
         """Базовое системное сообщение, которое всегда должно быть в начале истории."""
@@ -350,6 +365,19 @@ class ConversationCog(commands.Cog):
             return True
         return False
 
+    async def send_random_gif(self, message: Message) -> bool:
+        if not self._roll(1, 2, max_value=600):
+            return False
+
+        url = await self.gif_storage.random()
+
+        if not url:
+            return False
+
+        await message.reply(url)
+
+        return True
+    
     async def reply_to_ping(self, message: Message) -> bool:
         if not self.bot.user.mentioned_in(message):
             return False
@@ -478,6 +506,8 @@ class ConversationCog(commands.Cog):
         if message.author.bot:
             return
 
+        await self.save_gifs(message)
+
         # Обновить активность канала при любом сообщении (для сброса таймера)
         if message.content and message.content.strip():
             channel_id = message.channel.id
@@ -486,6 +516,7 @@ class ConversationCog(commands.Cog):
         handlers = (
             self.reply_to_question,
             self.send_random_phrase,
+            self.send_random_gif,
             self.reply_to_ping,
             lambda m: self.send_random_content(m, emoji=False),
             lambda m: self.send_random_content(m, emoji=True),
