@@ -2,16 +2,20 @@ import asyncio
 import random
 from datetime import datetime, timedelta
 from typing import Any
+from datetime import datetime as dt
 
+from ogurec.utils import TIME_ZONE
 import discord
 from discord import Message, app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from loguru import logger
 
 from ogurec.bot import OgurecBot
-from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.chatgpt import GPTClient, RateLimitError
-from ogurec.utils import get_random_sticker
+from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
+from ogurec.cogs.gif_storage_cog import GifStorage
+from ogurec.config.settings import Settings
+from ogurec.utils import TIME_ZONE, get_random_sticker
 
 MESSAGE_RANDOM_RANGE = 450
 REACTION_RANDOM_RANGE = 650
@@ -26,26 +30,32 @@ BOT_MOODS = [
     "Пиши как агресивный гопник",
 ]
 
-# Список моделей для ротации при ошибке 429 (в порядке приоритета)
 MODEL_ROTATION = [
-    "qwen/qwen3-32b",  # qwen
-    "openai/gpt-oss-120b",  # chatgpt
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-safeguard-20b",
-    "llama-3.1-8b-instant",
-    "llama-3.3-70b-versatile",
-    "meta-llama/llama-4-maverick-17b-128e-instruct",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "moonshotai/kimi-k2-instruct",
-    "moonshotai/kimi-k2-instruct-0905",
+    "openai/gpt-oss-120b",  
+    "openai/gpt-oss-20b",  
+    "openai/gpt-oss-safeguard-20b",  
+    "qwen/qwen3-32b",  
+    "llama-3.3-70b-versatile",  
+    "llama-3.1-8b-instant",  
+    "moonshotai/kimi-k2-instruct-0905", 
 ]
 
 
 class ConversationCog(commands.Cog):
-    def __init__(self, bot: OgurecBot, gpt_client: GPTClient, gif_storage: GifStorage):
+    def __init__(
+        self,
+        bot: OgurecBot,
+        gpt_client: GPTClient,
+        gif_storage: GifStorage,
+        settings: Settings,
+        activity_storage: ActivityStorage,
+    ):
         self.bot = bot
         self.message_counter = 0
         self.gpt_client = gpt_client
+
+        self.settings = settings
+        self.activity_storage = activity_storage
         # История разговоров по каналам: {channel_id: {"messages": [...], "last_activity": datetime}}
         self.conversation_history: dict[int, dict[str, Any]] = {}
         # Задачи для сброса истории
@@ -53,10 +63,13 @@ class ConversationCog(commands.Cog):
         # Текущая игра бота (статус Discord), передаётся в промпт
         self.current_game: str | None = None
         self.gif_storage = gif_storage
+
+        self.generate_report.start()
+
     @staticmethod
     def _roll(*values: int, max_value: int) -> bool:
         return random.randint(1, max_value) in values
-    
+
     async def save_gifs(self, message):
         for word in message.content.split():
             if (
@@ -73,12 +86,11 @@ class ConversationCog(commands.Cog):
 
     def _get_base_system_message(self, include_mood: bool = False, guild_name: str = None) -> dict:
         """Базовое системное сообщение, которое всегда должно быть в начале истории."""
-        from datetime import datetime as dt
-        from ogurec.utils import TIME_ZONE
-        
+
+
         now = dt.now(TIME_ZONE)
         current_date = now.strftime("%d.%m.%Y %H:%M")
-        
+
         content = "Ты Discord бот по имени Ogurec. Ты пишешь от 1 до 10 предложений за 1 ответ. "
         content += f"Текущая дата и время: {current_date}. "
 
@@ -122,32 +134,33 @@ class ConversationCog(commands.Cog):
                 info_parts.append(f"Сейчас играет в: {activity.name}")
             elif isinstance(activity, discord.Streaming):
                 info_parts.append(
-                    f"Стримит на {activity.platform}: название стрима: {activity.name} ссылка на стрим {activity.url}")
+                    f"Стримит на {activity.platform}: название стрима: {activity.name} ссылка на стрим {activity.url}"
+                )
             elif isinstance(activity, discord.CustomActivity):
                 info_parts.append(f"Кастомный статус: {activity.name}")
             elif isinstance(activity, discord.Spotify):
                 info_parts.append(f"Слушает трек Spotify: {activity.title} автора {activity.artist}")
 
         return ". ".join(info_parts)
-    
+
     def _get_mentioned_users_info(self, message: Message) -> str:
         """Получить информацию о всех упомянутых пользователях в сообщении."""
         if not message.guild or not message.mentions:
             return ""
-        
+
         mentioned_infos = []
         for user in message.mentions:
             # Пропускаем ботов и самого бота
             if user.bot or user.id == self.bot.user.id:
                 continue
-            
+
             user_info = self._get_user_info_for_gpt(user, message.guild)
             if user_info:
                 mentioned_infos.append(user_info)
-        
+
         if not mentioned_infos:
             return ""
-        
+
         return "Упомянутые пользователи в сообщении: " + ". ".join(mentioned_infos)
 
     def _get_emojis_system_message(self, guild) -> dict:
@@ -303,18 +316,20 @@ class ConversationCog(commands.Cog):
         # Добавляем информацию об авторе сообщения и упомянутых пользователях в одно сообщение
         author_info = self._get_user_info_for_gpt(message.author, message.guild)
         mentioned_users_info = self._get_mentioned_users_info(message)
-        
+
         info_parts = []
         if author_info:
-            info_parts.append(f"Тебе пишет пользователь: {author_info}. Ты знаешь эту информацию о пользователе, но используй её только иногда, когда это уместно и естественно")
+            info_parts.append(
+                f"Тебе пишет пользователь: {author_info}. Ты знаешь эту информацию о пользователе, но используй её только иногда, когда это уместно и естественно"
+            )
         if mentioned_users_info:
             info_parts.append(mentioned_users_info)
-        
+
         if info_parts:
             combined_info_message = {"role": "user", "content": " ".join(info_parts)}
             # Вставляем перед последним сообщением пользователя
             history.insert(-1, combined_info_message)
-
+        
         # Отправляем пустое сообщение-плейсхолдер с ответом на сообщение пользователя
         sent_message = await message.channel.send("💬 ...", reference=message)
 
@@ -374,10 +389,11 @@ class ConversationCog(commands.Cog):
         if not url:
             return False
 
+        await asyncio.sleep(random.randint(2, 60))
         await message.reply(url)
 
         return True
-    
+
     async def reply_to_ping(self, message: Message) -> bool:
         if not self.bot.user.mentioned_in(message):
             return False
@@ -423,50 +439,59 @@ class ConversationCog(commands.Cog):
         Возвращает True, если сообщение было удалено, False если несистемных сообщений не осталось.
         """
         history = self._get_channel_history(channel_id)
-        
+
         # Ищем первое несистемное сообщение
         for i, msg in enumerate(history):
             if msg.get("role") != "system":
                 history.pop(i)
                 logger.info(f"Removed topmost non-system message from history (channel {channel_id})")
                 return True
-        
+
         # Если несистемных сообщений нет
         return False
 
-    async def _chat_completion_with_rotation(self, messages: list[dict], channel_id: int):
+    async def _chat_completion_with_rotation(
+        self,
+        messages: list[dict],
+        channel_id: int | None = None,
+    ):
         """
         Выполняет запрос к GPT с ротацией моделей при ошибке 429.
         Пытается использовать модели из MODEL_ROTATION по очереди.
         Если все модели вернули 429, удаляет верхнее несистемное сообщение и повторяет попытку.
         """
         max_retries = 20  # Максимальное количество попыток удаления сообщений
-        
+
         for retry_attempt in range(max_retries):
             last_error = None
             all_429 = True  # Флаг, что все модели вернули 429
-
-            for model in MODEL_ROTATION:
-                try:
-                    async for chunk in self.gpt_client.chat_completion(messages=messages, model=model):
-                        yield chunk
-                    # Если дошли сюда, значит запрос успешен
-                    logger.info(f"Success GPT API request with model {model}")
-                    return
-                except RateLimitError as e:
-                    # При ошибке 429 пробуем следующую модель
-                    last_error = e
-                    continue
-                except Exception as e:
-                    # При других ошибках считаем, что не все модели вернули 429
-                    all_429 = False
-                    last_error = e
-                    logger.exception(f"Non-429 error with model {model}")
-                    continue
-            
+            for _ in range(len(self.gpt_client.api_keys)):
+                for model in MODEL_ROTATION:
+                    try:
+                        async for chunk in self.gpt_client.chat_completion(messages=messages, model=model):
+                            yield chunk
+                        # Если дошли сюда, значит запрос успешен
+                        logger.info(f"Success GPT API request with model {model}")
+                        return
+                    except RateLimitError as e:
+                        # При ошибке 429 пробуем следующую модель
+                        last_error = e
+                        logger.info(f"{model}, {e}")
+                        continue
+                    except Exception as e:
+                        # При других ошибках считаем, что не все модели вернули 429
+                        all_429 = False
+                        last_error = e
+                        logger.info(model, e)
+                        logger.exception(f"Non-429 error with model {model}, {e}")
+                        continue
+                self.gpt_client.rotate_key()
+                logger.info(
+                    f"Switching to API key {self.gpt_client.current_key_index + 1}/{len(self.gpt_client.api_keys)}"
+                )
             # Если все модели вернули 429, удаляем верхнее несистемное сообщение и повторяем
             if all_429 and last_error:
-                if self._remove_topmost_non_system_message(channel_id):
+                if channel_id and self._remove_topmost_non_system_message(channel_id):
                     # Обновляем список сообщений после удаления
                     messages = self._get_channel_history(channel_id)
                     logger.info(f"Retrying after removing message (attempt {retry_attempt + 1})")
@@ -475,11 +500,11 @@ class ConversationCog(commands.Cog):
                     # Не осталось несистемных сообщений для удаления
                     logger.warning("All models returned 429, but no non-system messages to remove")
                     raise last_error
-            
+
             # Если не все модели вернули 429 или это не 429 ошибка, пробрасываем
             if last_error:
                 raise last_error
-        
+
         # Если превысили максимальное количество попыток
         if last_error:
             raise last_error
@@ -528,3 +553,67 @@ class ConversationCog(commands.Cog):
 
         await self.add_random_reaction(message)
         self.message_counter += 1
+
+    @tasks.loop(minutes=1)
+    async def generate_report(self):
+
+        now = datetime.now(TIME_ZONE)
+
+        if now.hour == 6 and now.minute == 0:
+            """
+            Генерирует ежедневный отчет через GPT и отправляет его в основной канал.
+            """
+
+            report_text = await self.activity_storage.activity_info()
+            if not report_text:
+                report_text = "Сегодня активности пользователей не обнаружено."
+            channel_id = self.settings.main_chat_id
+            channel = self.bot.get_channel(channel_id)
+
+            if not channel:
+                logger.info("Канал для отчета не найден")
+                return
+
+            messages = [self._get_base_system_message(include_mood=True, guild_name=channel.guild.name)]
+
+            messages.append(self._get_emojis_system_message(channel.guild))
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"""
+        Сделай ежедневный отчет по активности пользователей. Напиши что отчет за прошлый день.
+
+        Данные для отчета:
+        {report_text}
+
+        Правила:
+        - Пиши как Ogurec.
+        - не выдумывай информацию. Запрещено.
+        - информацию для отчета возьми из поля данные.
+        - Отчет должен быть смешным и немного токсичным.
+        - делай упоминание пользователя по его id из данных, которые я тебе прислал перед тем как писать отчет про то, во что он играл. Упоминание в виде <@id_пользователя>(например, <@semenogka>) НЕ УДАЛЯЙ УГЛОВЫЕ СКОБКИ.
+        - Не заменяй <@ID> на @ID. 
+        - про кого то нужно говорить с негативчиком, а про кого то без негативчика.   
+        - Используй Discord эмодзи из доступного списка.
+        - Вставляй эмодзи прямо в текст.
+        - Не пиши названия эмодзи словами.
+        - Не используй Markdown таблицы.
+        - секунды переводи в часы.
+        - уложись в 2000 символов. ЭТО ОБЯЗАТЕЛЬНО.
+        - ты говоришь про каждого пользователя по порядку. Сначала про все игры одного пользователя и то сколько он часов првоел в каждой из игр, потом про следующего пользователя и так пока не закончатся все пользователи.
+        - если пользователь заходил в одну игру несколько раз, то часы нужно в этой игре нужно сложить и сказать про это в одной строке, а не в разных.
+        """,
+                }
+            )
+
+            content = ""
+
+            try:
+                async for chunk in self._chat_completion_with_rotation(messages=messages, channel_id=None):
+                    content += chunk
+
+                if content:
+                    await channel.send(content)
+
+            except Exception as e:
+                await channel.send(f"Ошибка генерации отчета: {e}")

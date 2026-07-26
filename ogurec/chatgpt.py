@@ -12,20 +12,28 @@ class GPTClientError(Exception):
 
 class RateLimitError(GPTClientError):
     """Ошибка превышения лимита запросов (429)."""
-    pass
+
 
 
 class GPTClient:
-    def __init__(self, api_key: str):
-        self.api_key = api_key
+    def __init__(self, api_keys: str):
+        self.api_keys = api_keys
+        self.current_key_index = 0
         self.session = aiohttp.ClientSession()
+
+    @property
+    def api_key(self):
+        return self.api_keys[self.current_key_index]
+
+    def rotate_key(self):
+        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
 
     async def chat_completion(
         self,
         messages: list[dict],
         model: str = "=",
         temperature: float = 1.0,
-        max_tokens: int = 8192,
+        max_tokens: int = 2048,
         top_p: float = 1.0,
     ) -> AsyncIterator[str]:
         payload = {

@@ -1,4 +1,3 @@
-
 import aiohttp
 
 STEAM_API_URL = "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
@@ -56,14 +55,14 @@ class SteamClient:
 
                 data = await resp.json()
                 app_data = data.get(str(appid), {})
-                
+
                 if not app_data.get("success", False):
                     return None
 
                 game_data = app_data.get("data", {})
                 short_description = game_data.get("short_description")
-                
-                return short_description if short_description else None
+
+                return short_description or None
         except Exception:
             return None
 

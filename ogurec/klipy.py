@@ -1,6 +1,5 @@
-import aiohttp
-from urllib.parse import quote
 
+import aiohttp
 
 KLIPY_API_URL = "https://api.klipy.com/api/v1/{app_key}/gifs/search"
 
@@ -16,9 +15,7 @@ class KlipyClient:
         self.session = aiohttp.ClientSession()
 
     async def get_first_gif_url(self, query: str) -> str:
-        url = KLIPY_API_URL.format(
-            app_key=self.app_key
-        )
+        url = KLIPY_API_URL.format(app_key=self.app_key)
 
         params = {
             "q": query,
@@ -32,9 +29,7 @@ class KlipyClient:
         async with self.session.get(url, params=params) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                raise KlipyClientError(
-                    f"Klipy API error {resp.status}: {text}"
-                )
+                raise KlipyClientError(f"Klipy API error {resp.status}: {text}")
 
             data = await resp.json()
 
@@ -42,6 +37,4 @@ class KlipyClient:
             return data["data"]["data"][0]["file"]["hd"]["gif"]["url"]
 
         except (KeyError, IndexError, TypeError) as e:
-            raise KlipyClientError(
-                f"GIF not found: {data}"
-            ) from e
+            raise KlipyClientError(f"GIF not found: {data}") from e

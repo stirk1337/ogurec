@@ -4,20 +4,20 @@ import discord
 from discord.ext import commands, tasks
 
 from ogurec.bot import OgurecBot
-from ogurec.cogs.rebrand.rebrand_users import USER_STEAM
-from ogurec.steam import SteamClient
+from ogurec.config.settings import Settings
 from ogurec.klipy import KlipyClient
+from ogurec.steam import SteamClient
 
 GAME_POST_GUARANTEE = 5
 
 
 class PresenceGameCog(commands.Cog):
-    def __init__(self, bot: OgurecBot, klipy_client: KlipyClient, steam_client: SteamClient, conversation_cog=None):
+    def __init__(self, bot: OgurecBot, klipy_client: KlipyClient, steam_client: SteamClient, settings: Settings, conversation_cog=None):
         self.bot = bot
         self.klipy_client = klipy_client
         self.steam_client = steam_client
         self.conversation_cog = conversation_cog
-
+        self.users_steam_id = settings.users_steam_id
         self.game_post_counter = 0
 
         self.statuses = (
@@ -34,9 +34,9 @@ class PresenceGameCog(commands.Cog):
         Возвращает (game_info, discord_user_id, game_name).
         """
         # Выбираем случайного пользователя из USER_STEAM
-        discord_user_ids = list(USER_STEAM.keys())
+        discord_user_ids = list(self.users_steam_id.keys())
         random_discord_id = random.choice(discord_user_ids)
-        steam_id = str(USER_STEAM[random_discord_id])
+        steam_id = str(self.users_steam_id[random_discord_id])
 
         # Получаем случайную игру из библиотеки пользователя
         game_info = await self.steam_client.get_random_game_from_user(steam_id)
@@ -54,10 +54,7 @@ class PresenceGameCog(commands.Cog):
 
         game_info, discord_user_id, game_name = await self._get_random_game_from_library()
 
-        activity = discord.Activity(
-            name=game_name,
-            type=discord.ActivityType.playing
-        )
+        activity = discord.Activity(name=game_name, type=discord.ActivityType.playing)
 
         await self.bot.change_presence(
             status=random.choice(self.statuses),
@@ -75,29 +72,19 @@ class PresenceGameCog(commands.Cog):
 
             # GPT теперь не ломает отправку GIF
             try:
-                game_message = await self._generate_game_message(
-                    channel,
-                    game_name,
-                    game_info,
-                    discord_user_id
-                )
+                game_message = await self._generate_game_message(channel, game_name, game_info, discord_user_id)
 
                 await channel.send(game_message)
 
                 if self.conversation_cog:
                     channel_id = channel.id
-                    self.conversation_cog.add_assistant_message(
-                        channel_id,
-                        game_message
-                    )
+                    self.conversation_cog.add_assistant_message(channel_id, game_message)
 
             except Exception as e:
                 print(f"Ошибка генерации сообщения через GPT: {e}")
 
                 # запасное сообщение если Groq упал
-                game_message = (
-                    f"<@{discord_user_id}> играет в {game_name} 🎮"
-                )
+                game_message = f"Взял из библиотеки данного слопера <@{discord_user_id}> игру: {game_name} 🎮."
 
                 await channel.send(game_message)
 
@@ -115,8 +102,7 @@ class PresenceGameCog(commands.Cog):
 
             self.game_post_counter = 0
 
-    async def _generate_game_message(
-        self, channel, game_name: str, game_info: dict, discord_user_id: int) -> str:
+    async def _generate_game_message(self, channel, game_name: str, game_info: dict, discord_user_id: int) -> str:
         """Генерирует сообщение про игру через GPT (1 предложение)."""
         channel_id = channel.id
 
@@ -138,7 +124,7 @@ class PresenceGameCog(commands.Cog):
         # С шансом 30% обосрать вкус игрока
         roast_taste = random.randint(1, 100) <= 30
 
-        game_prompt = f"Пингани {f"<@{discord_user_id}>"} и напиши сообщение о том, что ты идешь играть в {game_name}. ОБЯЗАТЕЛЬНО опиши игру в своем сообщении, используя эту информацию об игре: {game_description}. Используй описание игры, чтобы рассказать, что это за игра"
+        game_prompt = f"Пингани {f'<@{discord_user_id}>'}(ОБЯЗАТЕЛЬНО не убирай угловы скобки, всегда должно быть вот так: <@id_пользователя>) и напиши сообщение о том, что ты идешь играть в {game_name}. ОБЯЗАТЕЛЬНО опиши игру в своем сообщении, используя эту информацию об игре: {game_description}. Используй описание игры, чтобы рассказать, что это за игра"
 
         game_prompt += f". ОБЯЗАТЕЛЬНО упомяни, что ты взял эту игру из библиотеки пользователя. У этого пользователя в этой игре {hours:.1f} часов - ОБЯЗАТЕЛЬНО отдельно упомяни что пользователь наиграл {hours:.1f} часов"
         if roast_taste:

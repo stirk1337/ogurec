@@ -18,6 +18,7 @@ def get_random_sticker(server: Guild) -> GuildSticker:
     stickers = [sticker for sticker in server.stickers if sticker.available]
     return random.choice(stickers)
 
+
 def get_all_users_with_role(server: Guild, role_name: str) -> list[Member]:
     role_id = server.roles[0]
     for role in server.roles:

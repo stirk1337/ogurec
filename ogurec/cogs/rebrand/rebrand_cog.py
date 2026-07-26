@@ -6,7 +6,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from ogurec.bot import OgurecBot
-from ogurec.cogs.rebrand.rebrand_users import USERS_ID
+from ogurec.config.settings import Settings
 from ogurec.utils import (
     TIME_ZONE,
     get_all_users_with_role,
@@ -17,9 +17,9 @@ from ogurec.utils import (
 
 
 class Rebrand(commands.Cog):
-    def __init__(self, bot: OgurecBot):
+    def __init__(self, bot: OgurecBot, settings: Settings):
         self.bot = bot
-        self.users_id = USERS_ID
+        self.users_id = settings.users_discord_id
         self.last_rebranding_date = None  # Храним дату последнего выполнения, чтобы не сработать дважды
         self.remember_rebranding.start()
 
