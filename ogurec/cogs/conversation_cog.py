@@ -3,7 +3,8 @@ import random
 from datetime import datetime, timedelta, time
 from typing import Any
 from datetime import datetime as dt
-
+from collections import defaultdict
+import asyncio
 from ogurec.utils import TIME_ZONE
 import discord
 from discord import Message, app_commands
@@ -32,7 +33,6 @@ BOT_MOODS = [
 
 MODEL_ROTATION = [ 
     "qwen/qwen3.6-27b", 
-    "groq/compound",
     "groq/compound-mini",
     "llama-3.3-70b-versatile", 
     "llama-3.1-8b-instant", 
@@ -60,6 +60,8 @@ class ConversationCog(commands.Cog):
         # Текущая игра бота (статус Discord), передаётся в промпт
         self.current_game: str | None = None
         self.gif_storage = gif_storage
+
+        self.channel_locks = defaultdict(asyncio.Lock)
 
         self.generate_report.start()
 
@@ -288,14 +290,22 @@ class ConversationCog(commands.Cog):
 
     async def reply_with_gpt(self, message: Message):
         """
-        Отвечает на сообщение пользователя через GPT с эффектом "печатает по частям".
-        Запоминает историю разговора и сбрасывает её через час без активности.
+        Создается очередь из всех сообщений, на которые должен овтетить бот. 
+        Бот не отвечает на 2 или более сообщения одновременно.
         """
         if message.author.bot or not message.content.strip():
             return
 
         channel_id = message.channel.id
 
+        async with self.channel_locks[channel_id]:
+            await self._reply_with_gpt_locked(message, channel_id)
+
+    async def _reply_with_gpt_locked(self, message: Message, channel_id):
+        """
+        Отвечает на сообщение пользователя через GPT с эффектом "печатает по частям".
+        Запоминает историю разговора и сбрасывает её через час без активности.
+        """
         # Проверяем, будет ли это первое пользовательское сообщение (до добавления текущего)
         history_before = self._get_channel_history(channel_id)
         user_messages_count = sum(1 for msg in history_before if msg.get("role") == "user")
@@ -352,7 +362,7 @@ class ConversationCog(commands.Cog):
                     if len(content) > 2000:
                         content = content[-2000:]
                     await sent_message.edit(content=content)
-
+                
                 # Добавить ответ бота в историю
                 if content:
                     self._add_assistant_message(channel_id, content)
