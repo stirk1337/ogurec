@@ -1,6 +1,6 @@
 import asyncio
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from typing import Any
 from datetime import datetime as dt
 
@@ -30,16 +30,13 @@ BOT_MOODS = [
     "Пиши как агресивный гопник",
 ]
 
-MODEL_ROTATION = [
-    "openai/gpt-oss-120b",  
-    "openai/gpt-oss-20b",  
-    "openai/gpt-oss-safeguard-20b",  
-    "qwen/qwen3-32b",  
-    "llama-3.3-70b-versatile",  
-    "llama-3.1-8b-instant",  
-    "moonshotai/kimi-k2-instruct-0905", 
+MODEL_ROTATION = [ 
+    "qwen/qwen3.6-27b", 
+    "groq/compound",
+    "groq/compound-mini",
+    "llama-3.3-70b-versatile", 
+    "llama-3.1-8b-instant", 
 ]
-
 
 class ConversationCog(commands.Cog):
     def __init__(
@@ -554,22 +551,17 @@ class ConversationCog(commands.Cog):
         await self.add_random_reaction(message)
         self.message_counter += 1
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(time=time(hour=6, minute=0, tzinfo=TIME_ZONE))
     async def generate_report(self):
-
-        now = datetime.now(TIME_ZONE)
-
-        if now.hour == 6 and now.minute == 0:
-            """
+        """
             Генерирует ежедневный отчет через GPT и отправляет его в основной канал.
-            """
-
+        """
+        try:
             report_text = await self.activity_storage.activity_info()
             if not report_text:
                 report_text = "Сегодня активности пользователей не обнаружено."
             channel_id = self.settings.main_chat_id
             channel = self.bot.get_channel(channel_id)
-
             if not channel:
                 logger.info("Канал для отчета не найден")
                 return
@@ -602,18 +594,22 @@ class ConversationCog(commands.Cog):
         - уложись в 2000 символов. ЭТО ОБЯЗАТЕЛЬНО.
         - ты говоришь про каждого пользователя по порядку. Сначала про все игры одного пользователя и то сколько он часов првоел в каждой из игр, потом про следующего пользователя и так пока не закончатся все пользователи.
         - если пользователь заходил в одну игру несколько раз, то часы нужно в этой игре нужно сложить и сказать про это в одной строке, а не в разных.
+        - Говори про всех из этого списка, никого не пропусти.
         """,
                 }
             )
 
             content = ""
 
-            try:
-                async for chunk in self._chat_completion_with_rotation(messages=messages, channel_id=None):
-                    content += chunk
+            async for chunk in self._chat_completion_with_rotation(messages=messages, channel_id=None):
+                content += chunk
 
-                if content:
-                    await channel.send(content)
+            if content:
+                await channel.send(content)
 
-            except Exception as e:
-                await channel.send(f"Ошибка генерации отчета: {e}")
+        except Exception as e:
+            logger.info(f"Ошибка генерации отчета: {e}")
+
+    @generate_report.before_loop 
+    async def before_generate_report(self): 
+        await self.bot.wait_until_ready()
