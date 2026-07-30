@@ -567,6 +567,8 @@ class ConversationCog(commands.Cog):
             Генерирует ежедневный отчет через GPT и отправляет его в основной канал.
         """
         try:
+            self.gif_storage.cleanup()
+
             report_text = await self.activity_storage.activity_info()
             if not report_text:
                 report_text = "Сегодня активности пользователей не обнаружено."

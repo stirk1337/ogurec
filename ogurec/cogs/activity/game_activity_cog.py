@@ -1,4 +1,5 @@
 from datetime import datetime as dt
+from datetime import time
 
 import discord
 from discord.ext import commands, tasks
@@ -66,13 +67,10 @@ class GameActivity(commands.Cog):
                 started_at=int(dt.now(TIME_ZONE).timestamp()),
             )
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(time=time(hour=6, minute=5, tzinfo=TIME_ZONE))
     async def cleanup_task(self):
-        now = dt.now(TIME_ZONE)
-
-        if now.hour == 6 and now.minute == 5:
-            try:
-                await self.activity_storage.cleanup()
-                logger.info("Activity cleanup completed")
-            except Exception:
-                logger.exception("Failed to cleanup activity storage")
+        try:
+            await self.activity_storage.cleanup()
+            logger.info("Activity cleanup completed")
+        except Exception:
+            logger.exception("Failed to cleanup activity storage")
