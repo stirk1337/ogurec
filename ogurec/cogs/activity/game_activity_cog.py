@@ -17,6 +17,8 @@ class GameActivity(commands.Cog):
         self.users_id = settings.users_discord_id
         self.active_sessions = {}
         self.activity_storage = activity_storage
+
+        self.last_cleanup_date = None
         self.cleanup_task.start()
 
     def get_game(self, member: discord.Member) -> str | None:
@@ -67,10 +69,28 @@ class GameActivity(commands.Cog):
                 started_at=int(dt.now(TIME_ZONE).timestamp()),
             )
 
-    @tasks.loop(time=time(hour=6, minute=5, tzinfo=TIME_ZONE))
+    @tasks.loop(seconds=30)
     async def cleanup_task(self):
         try:
+            now = dt.now(TIME_ZONE)
+
+            if now.hour != 6 or now.minute < 5:
+                return
+
+            today = now.date()
+
+            if self.last_cleanup_date == today:
+                return
+        
             await self.activity_storage.cleanup()
+
+            self.last_cleanup_date = today
+
             logger.info("Activity cleanup completed")
         except Exception:
             logger.exception("Failed to cleanup activity storage")
+
+    @cleanup_task.before_loop 
+    async def before_cleanup_task(self): 
+            await self.bot.wait_until_ready()
+            logger.info("теперь данные могут очистится.")

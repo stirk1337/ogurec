@@ -1,5 +1,3 @@
-from datetime import datetime
-
 import aiosqlite
 
 
@@ -77,25 +75,10 @@ class ActivityStorage:
         await self.conn.commit()
 
     async def cleanup(self):
-        now = datetime.now()
-
-        # Удалять записи только после 06:00
-        if now.hour < 6:
-            return
-
-        today_6am = now.replace(
-            hour=6,
-            minute=0,
-            second=0,
-            microsecond=0,
-        )
-
         await self.conn.execute(
             """
             DELETE FROM activity
-            WHERE started_at < ?
-            """,
-            (int(today_6am.timestamp()),),
+            """
         )
 
         await self.conn.commit()

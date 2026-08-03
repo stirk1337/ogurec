@@ -21,6 +21,10 @@ class Rebrand(commands.Cog):
         self.bot = bot
         self.users_id = settings.users_discord_id
         self.last_rebranding_date = None  # Храним дату последнего выполнения, чтобы не сработать дважды
+        self.last_guild_name = None
+        self.rebrand_done = False
+        self.friendly_reminder = False
+        self.now_user = None
         self.remember_rebranding.start()
 
     def _get_next_rebranding_time(self) -> timedelta:
@@ -96,40 +100,72 @@ class Rebrand(commands.Cog):
         )
         await interaction.response.send_message(embed=embed)
 
-    @tasks.loop(seconds=30)
-    async def remember_rebranding(self):
-        # Проверяем время в нужном часовом поясе
-        now = dt.now(TIME_ZONE)
 
-        # Выполняем только в пятницу в 00:01
-        if now.weekday() != 4:  # Пятница
-            return
-
-        if now.hour != 0 or now.minute != 1:
-            return
-
-        # Проверяем четность номера недели (четная неделя = срабатывает)
-        week_number = now.isocalendar()[1]  # Номер недели в году
-        if week_number % 2 != 0:  # Нечетная неделя - пропускаем
-            return
-
-        # Защита от повторного срабатывания: проверяем, что мы еще не выполняли сегодня
-        today_date = now.date()
-        if self.last_rebranding_date == today_date:
-            return
-
-        # Помечаем, что мы выполнили задачу сегодня
-        self.last_rebranding_date = today_date
-
-        channel = self.bot.get_channel(self.bot.settings.bot_chat_id)
+    async def swap_rebrand_user(self, channel):
         now_user = get_all_users_with_role(channel.guild, "Ребрендинг")[0]
         next_user_place = self.users_id.index(now_user.id) + 1
         if next_user_place >= len(self.users_id):
             next_user_place = 0
         next_user = channel.guild.get_member(self.users_id[next_user_place])
-        random_emoji = get_random_formatted_emoji(channel.guild)
+        
         role = get_role_by_name(channel.guild, "Ребрендинг")
         await now_user.remove_roles(role)
-        await next_user.add_roles(role)
-        await channel.send(f"<@{next_user.id}>, напоминаю, что сегодня ты делаешь Ребрендинг {random_emoji}")
-        await channel.send(stickers=[get_random_sticker(channel.guild)])
+        await next_user.add_roles(role)        
+
+        return next_user
+    
+    @tasks.loop(seconds=30)
+    async def remember_rebranding(self):
+        try:
+            now = dt.now(TIME_ZONE)
+            today_date = now.date()
+
+            channel = self.bot.get_channel(self.bot.settings.bot_chat_id)
+            random_emoji = get_random_formatted_emoji(channel.guild)
+
+            if self.rebrand_done == False:
+                # Выполняем только в пятницу в 00:01
+                if now.weekday() != 4:  # Пятница
+                    return
+
+                if now.hour != 0 or now.minute != 1:
+                    return
+
+                # Проверяем четность номера недели (четная неделя = срабатывает)
+                week_number = now.isocalendar()[1]  # Номер недели в году
+                if week_number % 2 != 0:  # Нечетная неделя - пропускаем
+                    return
+
+                if self.last_rebranding_date == today_date:
+                    return
+
+                
+                next_user = await self.swap_rebrand_user(channel)
+                self.now_user = next_user.id
+                await channel.send(f"<@{self.now_user}>, напоминаю, что сегодня ты делаешь Ребрендинг {random_emoji}")
+                await channel.send(stickers=[get_random_sticker(channel.guild)])
+
+                # Помечаем, что мы выполнили задачу сегодня
+                self.last_rebranding_date = today_date
+                self.rebrand_done = True
+                self.last_guild_name = channel.guild.name
+            else:
+                if channel.guild.name == self.last_guild_name:
+                    if abs((today_date - self.last_rebranding_date).days) == 1 and self.friendly_reminder == False:
+                        await channel.send(f"<@{self.now_user}>, чувак ты делаешь ребрендинг так то {random_emoji}")
+                        self.friendly_reminder = True
+                    if abs((today_date - self.last_rebranding_date).days) == 2:
+                        next_user = await self.swap_rebrand_user(channel)
+
+                        await channel.send(f"<@{self.now_user}>, съебался, следующий на ребрендинге <@{next_user.id}> {random_emoji}")
+
+                        self.rebrand_done = False
+                        self.friendly_reminder = False
+                        self.now_user = next_user.id
+                        self.last_rebranding_date = today_date
+                else:
+                    self.rebrand_done = False
+                    self.friendly_reminder = False
+                    self.last_rebranding_date = today_date
+        except Exception as e:
+            await channel.send(f"Ошибка при ребрандинге: {e}")

@@ -63,6 +63,7 @@ class ConversationCog(commands.Cog):
 
         self.channel_locks = defaultdict(asyncio.Lock)
 
+        self.last_report_date = None
         self.generate_report.start()
 
     @staticmethod
@@ -101,6 +102,7 @@ class ConversationCog(commands.Cog):
         content += (
             "Название сервера, дата и время выше — справочно; не пересказывай их и не вставляй в ответ "
             "без запроса или без явной нужды по смыслу (время, название сервера, «мы тут на сервере» и т.п.)."
+            "Когда ты "
         )
 
         if include_mood:
@@ -198,7 +200,7 @@ class ConversationCog(commands.Cog):
     def _ensure_system_messages(self, channel_id: int, guild, is_first_user_message: bool = False) -> None:
         """Убедиться, что в истории есть необходимые системные сообщения."""
         history = self._get_channel_history(channel_id)
-
+        
         # Проверяем, есть ли уже системные сообщения
         has_base_system = False
         has_emojis_system = False
@@ -272,10 +274,10 @@ class ConversationCog(commands.Cog):
             # Задача была отменена из-за новой активности - это нормально
             pass
 
-    def _add_user_message(self, channel_id: int, content: str):
+    def _add_user_message(self, channel_id: int, content: str, user_name: str):
         """Добавить сообщение пользователя в историю."""
         history = self._get_channel_history(channel_id)
-        history.append({"role": "user", "content": content})
+        history.append({"role": "user", "content": content, "name": user_name})
         self._update_channel_activity(channel_id)
 
     def _add_assistant_message(self, channel_id: int, content: str):
@@ -288,7 +290,7 @@ class ConversationCog(commands.Cog):
         """Публичный метод для добавления ответа бота в историю."""
         self._add_assistant_message(channel_id, content)
 
-    async def reply_with_gpt(self, message: Message):
+    async def reply_with_gpt(self, message: Message, random_phrase: bool = False):
         """
         Создается очередь из всех сообщений, на которые должен овтетить бот. 
         Бот не отвечает на 2 или более сообщения одновременно.
@@ -299,9 +301,9 @@ class ConversationCog(commands.Cog):
         channel_id = message.channel.id
 
         async with self.channel_locks[channel_id]:
-            await self._reply_with_gpt_locked(message, channel_id)
+            await self._reply_with_gpt_locked(message, channel_id, random_phrase)
 
-    async def _reply_with_gpt_locked(self, message: Message, channel_id):
+    async def _reply_with_gpt_locked(self, message: Message, channel_id, random_phrase: bool):
         """
         Отвечает на сообщение пользователя через GPT с эффектом "печатает по частям".
         Запоминает историю разговора и сбрасывает её через час без активности.
@@ -315,7 +317,7 @@ class ConversationCog(commands.Cog):
         self._ensure_system_messages(channel_id, message.guild, is_first_user_message)
 
         # Добавить сообщение пользователя в историю
-        self._add_user_message(channel_id, message.content)
+        self._add_user_message(channel_id, message.content, message.author.name)
 
         # Получить историю для этого канала с системными сообщениями
         history = self._get_channel_history(channel_id)
@@ -325,15 +327,20 @@ class ConversationCog(commands.Cog):
         mentioned_users_info = self._get_mentioned_users_info(message)
 
         info_parts = []
-        if author_info:
+        if random_phrase:
+            info_parts.append(
+                f"Это сообщение предназначалось не тебе, так что не всопринимай эти сообщения на свой счёт. Изучи сообщение, на которое отвечаешь, и несколько сообщений до этого. Ты должен написать ответ по теме к этим сообщениям."
+            )
+        elif author_info:
             info_parts.append(
                 f"Тебе пишет пользователь: {author_info}. Ты знаешь эту информацию о пользователе, но используй её только иногда, когда это уместно и естественно"
             )
+        
         if mentioned_users_info:
             info_parts.append(mentioned_users_info)
 
         if info_parts:
-            combined_info_message = {"role": "user", "content": " ".join(info_parts)}
+            combined_info_message = {"role": "user", "content": " ".join(info_parts), "name":message.author.name}
             # Вставляем перед последним сообщением пользователя
             history.insert(-1, combined_info_message)
         
@@ -383,7 +390,7 @@ class ConversationCog(commands.Cog):
 
     async def send_random_phrase(self, message: Message) -> bool:
         if self._roll(1, 2, max_value=MESSAGE_RANDOM_RANGE):
-            await self.reply_with_gpt(message)
+            await self.reply_with_gpt(message, True)
             return True
         return False
 
@@ -561,14 +568,23 @@ class ConversationCog(commands.Cog):
         await self.add_random_reaction(message)
         self.message_counter += 1
 
-    @tasks.loop(time=time(hour=6, minute=0, tzinfo=TIME_ZONE))
+    @tasks.loop(seconds=30)
     async def generate_report(self):
         """
             Генерирует ежедневный отчет через GPT и отправляет его в основной канал.
         """
         try:
-            self.gif_storage.cleanup()
+            now = dt.now(TIME_ZONE)
 
+            if now.hour != 6:
+                return
+
+            today = now.date()
+
+            if self.last_report_date == today:
+                return
+        
+            logger.info("генерация отчета")
             report_text = await self.activity_storage.activity_info()
             if not report_text:
                 report_text = "Сегодня активности пользователей не обнаружено."
@@ -619,9 +635,15 @@ class ConversationCog(commands.Cog):
             if content:
                 await channel.send(content)
 
+            self.last_report_date = today
         except Exception as e:
-            logger.info(f"Ошибка генерации отчета: {e}")
+            await channel.send(f"Ошибка генерации отчета: {e}")
 
     @generate_report.before_loop 
     async def before_generate_report(self): 
         await self.bot.wait_until_ready()
+        logger.info("теперь репорт может быть сгенерен.")
+
+    @generate_report.error 
+    async def generate_report_error(self, error): 
+        logger.exception(f"генерация репорта крашнулась: {error}")
