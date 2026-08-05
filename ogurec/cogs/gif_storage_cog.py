@@ -1,7 +1,7 @@
 import time
 
 import aiosqlite
-
+from loguru import logger
 
 class GifStorage:
     def __init__(self, path="gifs.db"):
@@ -25,11 +25,27 @@ class GifStorage:
         await self.conn.execute("INSERT OR IGNORE INTO gifs(url, added_at) VALUES(?, ?)", (url, int(time.time())))
 
     async def cleanup(self):
-        week = 7 * 24 * 3600
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) FROM gifs"
+        )
 
-        await self.conn.execute("DELETE FROM gifs WHERE added_at < ?", (int(time.time()) - week,))
+        before = await cursor.fetchone()
+
+        week = 7*24*3600
+
+        await self.conn.execute(
+            "DELETE FROM gifs WHERE added_at < ?", (int(time.time()) - week,)
+        )
 
         await self.conn.commit()
+
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) FROM gifs"
+        )
+
+        after = await cursor.fetchone()
+
+        logger.info(f"Перед удалением гифок: {before[0]}, после удаления: {after[0]}")
 
     async def random(self):
         await self.cleanup()
