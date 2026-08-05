@@ -1,4 +1,5 @@
 import aiosqlite
+from loguru import logger
 
 
 class ActivityStorage:
@@ -75,13 +76,25 @@ class ActivityStorage:
         await self.conn.commit()
 
     async def cleanup(self):
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) FROM activity"
+        )
+
+        before = await cursor.fetchone()
+
         await self.conn.execute(
-            """
-            DELETE FROM activity
-            """
+            "DELETE FROM activity"
         )
 
         await self.conn.commit()
+
+        cursor = await self.conn.execute(
+            "SELECT COUNT(*) FROM activity"
+        )
+
+        after = await cursor.fetchone()
+
+        logger.info(f"Перед удалением активности: {before[0]}, после удаления активности: {after[0]}")
 
     async def activity_info(self):
         async with self.conn.execute(

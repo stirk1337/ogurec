@@ -13,10 +13,10 @@ class Settings(BaseSettings):
     users_discord_id: list[int] = [
         279945550432829441,  # artem
         310451376612179968,  # roma
-        387114624409010176,  # slava
         372629156283940865,  # egor
         279676792409948160,  # stirk
         871973760729747457,  # semen
+        387114624409010176,  # slava
     ]
 
     users_steam_id: dict[int, int] = {
