@@ -3,35 +3,24 @@ from collections.abc import AsyncIterator
 
 import aiohttp
 
-API_URL = "https://api.groq.com/openai/v1/chat/completions"
-
+API_URL = "https://freellmapi.stirk1337.ru/v1/chat/completions"
 
 class GPTClientError(Exception):
     pass
 
-
 class RateLimitError(GPTClientError):
     """Ошибка превышения лимита запросов (429)."""
 
-
-
 class GPTClient:
-    def __init__(self, api_keys: str):
-        self.api_keys = api_keys
-        self.current_key_index = 0
+    def __init__(self, api_key: str):
+        self.api_key = api_key
         self.session = aiohttp.ClientSession()
-
-    @property
-    def api_key(self):
-        return self.api_keys[self.current_key_index]
-
-    def rotate_key(self):
-        self.current_key_index = (self.current_key_index + 1) % len(self.api_keys)
+        self.last_model: str | None = None
 
     async def chat_completion(
         self,
         messages: list[dict],
-        model: str = "=",
+        model: str = "auto:smart",
         temperature: float = 1.0,
         max_tokens: int = 2048,
         top_p: float = 1.0,
@@ -45,10 +34,6 @@ class GPTClient:
             "stream": True,
         }
 
-        # Для модели qwen устанавливаем reasoning_effort = "none"
-        if "qwen" in model.lower():
-            payload["reasoning_effort"] = "none"
-
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -58,8 +43,8 @@ class GPTClient:
             if resp.status != 200:
                 text = await resp.text()
                 if resp.status in [429, 413, 404]:
-                    raise RateLimitError(f"Groq API rate limit exceeded (429): {text}")
-                raise GPTClientError(f"Groq API error {resp.status}: {text}")
+                    raise RateLimitError(f"API rate limit exceeded (429): {text}")
+                raise GPTClientError(f"API error {resp.status}: {text}")
 
             async for line in resp.content:
                 chunk_text = line.decode().strip()
@@ -68,6 +53,8 @@ class GPTClient:
 
                 try:
                     payload = json.loads(chunk_text[len("data:") :])
+                    if payload.get("model"):
+                        self.last_model = payload["model"]
                     delta = payload["choices"][0]["delta"]
                     text = delta.get("content")
                     if text:

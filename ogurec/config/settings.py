@@ -4,7 +4,7 @@ from pydantic import field_validator
 class Settings(BaseSettings):
     discord_bot_token: str
     klipy_api_key: str
-    gpt_api_keys: list[str]
+    gpt_api_key: str
     steam_api_key: str
     prefix: str = "!"
     bot_chat_id: int = 749662464538443948

@@ -31,13 +31,6 @@ BOT_MOODS = [
     "Пиши как агресивный гопник",
 ]
 
-MODEL_ROTATION = [ 
-    "qwen/qwen3.6-27b", 
-    "groq/compound-mini",
-    "llama-3.3-70b-versatile", 
-    "llama-3.1-8b-instant", 
-]
-
 class ConversationCog(commands.Cog):
     def __init__(
         self,
@@ -469,41 +462,31 @@ class ConversationCog(commands.Cog):
         channel_id: int | None = None,
     ):
         """
-        Выполняет запрос к GPT с ротацией моделей при ошибке 429.
-        Пытается использовать модели из MODEL_ROTATION по очереди.
-        Если все модели вернули 429, удаляет верхнее несистемное сообщение и повторяет попытку.
+        Выполняет запрос к GPT.
         """
         max_retries = 20  # Максимальное количество попыток удаления сообщений
 
         for retry_attempt in range(max_retries):
             last_error = None
-            all_429 = True  # Флаг, что все модели вернули 429
-            for _ in range(len(self.gpt_client.api_keys)):
-                for model in MODEL_ROTATION:
-                    try:
-                        async for chunk in self.gpt_client.chat_completion(messages=messages, model=model):
-                            yield chunk
-                        # Если дошли сюда, значит запрос успешен
-                        logger.info(f"Success GPT API request with model {model}")
-                        return
-                    except RateLimitError as e:
-                        # При ошибке 429 пробуем следующую модель
-                        last_error = e
-                        logger.info(f"{model}, {e}")
-                        continue
-                    except Exception as e:
-                        # При других ошибках считаем, что не все модели вернули 429
-                        all_429 = False
-                        last_error = e
-                        logger.info(model, e)
-                        logger.exception(f"Non-429 error with model {model}, {e}")
-                        continue
-                self.gpt_client.rotate_key()
-                logger.info(
-                    f"Switching to API key {self.gpt_client.current_key_index + 1}/{len(self.gpt_client.api_keys)}"
-                )
-            # Если все модели вернули 429, удаляем верхнее несистемное сообщение и повторяем
-            if all_429 and last_error:
+            e_429 = False
+            try:
+                async for chunk in self.gpt_client.chat_completion(messages=messages):
+                    yield chunk
+                # Если дошли сюда, значит запрос успешен
+                logger.info(f"Success GPT API request, with model {self.gpt_client.last_model or 'unknown'}")
+                return
+            except RateLimitError as e:
+                # При ошибке 429 удаляем сообщение и повторяем (см. проверку ниже)
+                e_429 = True
+                last_error = e
+                logger.info(f"{e}")
+            except Exception as e:
+                # При других ошибках считаем, что это не 429
+                last_error = e
+                logger.info(e)
+                logger.exception(f"Non-429 error, {e}")
+
+            if e_429 and last_error:
                 if channel_id and self._remove_topmost_non_system_message(channel_id):
                     # Обновляем список сообщений после удаления
                     messages = self._get_channel_history(channel_id)
@@ -513,8 +496,7 @@ class ConversationCog(commands.Cog):
                     # Не осталось несистемных сообщений для удаления
                     logger.warning("All models returned 429, but no non-system messages to remove")
                     raise last_error
-
-            # Если не все модели вернули 429 или это не 429 ошибка, пробрасываем
+                
             if last_error:
                 raise last_error
 

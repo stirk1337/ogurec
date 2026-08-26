@@ -4,7 +4,7 @@ from datetime import timedelta
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
-
+from loguru import logger
 from ogurec.bot import OgurecBot
 from ogurec.config.settings import Settings
 from ogurec.utils import (
@@ -142,6 +142,7 @@ class Rebrand(commands.Cog):
                 
                 next_user = await self.swap_rebrand_user(channel)
                 self.now_user = next_user.id
+                
                 await channel.send(f"<@{self.now_user}>, напоминаю, что сегодня ты делаешь Ребрендинг {random_emoji}")
                 await channel.send(stickers=[get_random_sticker(channel.guild)])
 
@@ -150,6 +151,7 @@ class Rebrand(commands.Cog):
                 self.rebrand_done = True
                 self.last_guild_name = channel.guild.name
             else:
+                logger.info("перешел на френдли ремайндер")
                 if channel.guild.name == self.last_guild_name:
                     if abs((today_date - self.last_rebranding_date).days) == 1 and self.friendly_reminder == False:
                         await channel.send(f"<@{self.now_user}>, чувак ты делаешь ребрендинг так то {random_emoji}")
@@ -158,14 +160,18 @@ class Rebrand(commands.Cog):
                         next_user = await self.swap_rebrand_user(channel)
 
                         await channel.send(f"<@{self.now_user}>, съебался, следующий на ребрендинге <@{next_user.id}> {random_emoji}")
-
-                        self.rebrand_done = False
                         self.friendly_reminder = False
                         self.now_user = next_user.id
                         self.last_rebranding_date = today_date
+                    logger.info(self.now_user)
                 else:
                     self.rebrand_done = False
                     self.friendly_reminder = False
                     self.last_rebranding_date = today_date
         except Exception as e:
             await channel.send(f"Ошибка при ребрандинге: {e}")
+
+    @remember_rebranding.before_loop
+    async def before_remember_rebranding(self):
+        await self.bot.wait_until_ready()
+        logger.info("remember_rebranding started")

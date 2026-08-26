@@ -15,7 +15,7 @@ Discord бот с интеграцией GPT, Steam API и автоматиче�
 Настройка переменных среды (файл `.env` в корне)
 ```
 DISCORD_BOT_TOKEN=xxx
-GPT_API_KEYS_RAW=key1,key2,....          # Groq API ключи
+GPT_API_KEY=key1
 TENOR_API_KEY=xxx
 STEAM_API_KEY=xxx
 PREFIX=!
