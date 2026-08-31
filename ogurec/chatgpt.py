@@ -3,7 +3,7 @@ from collections.abc import AsyncIterator
 
 import aiohttp
 
-API_URL = "https://freellmapi.stirk1337.ru/v1/chat/completions"
+from ogurec.config.settings import Settings
 
 class GPTClientError(Exception):
     pass
@@ -12,21 +12,21 @@ class RateLimitError(GPTClientError):
     """Ошибка превышения лимита запросов (429)."""
 
 class GPTClient:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, settings: Settings):
         self.api_key = api_key
+        self.settings = settings
         self.session = aiohttp.ClientSession()
         self.last_model: str | None = None
 
     async def chat_completion(
         self,
         messages: list[dict],
-        model: str = "auto:smart",
         temperature: float = 1.0,
         max_tokens: int = 2048,
         top_p: float = 1.0,
     ) -> AsyncIterator[str]:
         payload = {
-            "model": model,
+            "model": self.settings.llm_model,
             "messages": messages,
             "temperature": temperature,
             "max_completion_tokens": max_tokens,
@@ -39,7 +39,8 @@ class GPTClient:
             "Content-Type": "application/json",
         }
 
-        async with self.session.post(API_URL, json=payload, headers=headers) as resp:
+        self.last_model = None
+        async with self.session.post(self.settings.api_base_url, json=payload, headers=headers) as resp:
             if resp.status != 200:
                 text = await resp.text()
                 if resp.status in [429, 413, 404]:
@@ -51,13 +52,23 @@ class GPTClient:
                 if not chunk_text or not chunk_text.startswith("data:"):
                     continue
 
+                if chunk_text == "data: [DONE]":
+                    break
                 try:
                     payload = json.loads(chunk_text[len("data:") :])
+                    if payload.get("error"):
+                        err = payload["error"]
+                        msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+                        if "429" in str(err) or "rate" in msg.lower():
+                            raise RateLimitError(f"API rate limit in stream: {msg}")
+                        raise GPTClientError(f"API error in stream: {msg}")
                     if payload.get("model"):
                         self.last_model = payload["model"]
                     delta = payload["choices"][0]["delta"]
                     text = delta.get("content")
                     if text:
                         yield text
-                except:
+                except (RateLimitError, GPTClientError):
+                    raise
+                except Exception:
                     continue

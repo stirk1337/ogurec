@@ -16,6 +16,7 @@ from ogurec.chatgpt import GPTClient, RateLimitError
 from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
 from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.config.settings import Settings
+from ogurec.search import SearchService
 from ogurec.utils import TIME_ZONE, get_random_sticker
 
 MESSAGE_RANDOM_RANGE = 450
@@ -39,6 +40,7 @@ class ConversationCog(commands.Cog):
         gif_storage: GifStorage,
         settings: Settings,
         activity_storage: ActivityStorage,
+        search_service: SearchService | None = None,
     ):
         self.bot = bot
         self.message_counter = 0
@@ -46,6 +48,7 @@ class ConversationCog(commands.Cog):
 
         self.settings = settings
         self.activity_storage = activity_storage
+        self.search_service = search_service
         # История разговоров по каналам: {channel_id: {"messages": [...], "last_activity": datetime}}
         self.conversation_history: dict[int, dict[str, Any]] = {}
         # Задачи для сброса истории
@@ -84,7 +87,7 @@ class ConversationCog(commands.Cog):
         now = dt.now(TIME_ZONE)
         current_date = now.strftime("%d.%m.%Y %H:%M")
 
-        content = "Ты Discord бот по имени Ogurec. Ты пишешь от 1 до 10 предложений за 1 ответ. "
+        content = "Ты Discord бот по имени Ogurec. Ты пишешь от 1 до 10 предложений за 1 ответ."
         content += f"Текущая дата и время: {current_date}. "
 
         content += f"Название сервера: {guild_name}. "
@@ -311,6 +314,24 @@ class ConversationCog(commands.Cog):
         # Добавить сообщение пользователя в историю
         self._add_user_message(channel_id, message.content, message.author.name)
 
+        has_user_mention = any(
+            not u.bot and u.id != self.bot.user.id
+            for u in getattr(message, "mentions", [])
+        )
+        search_context: str | None = None
+        if self.search_service and not has_user_mention and self.search_service.should_search(message.content):
+            try:
+                logger.info(f"search triggered for: {message.content[:80]}")
+                search_context = await self.search_service.search(message.content)
+                if search_context:
+                    logger.info(f"search ok, chars={len(search_context)}")
+                else:
+                    logger.info("search returned no results")
+            except Exception as e:
+                logger.warning(f"search error: {e}")
+        elif has_user_mention:
+            logger.info("search skipped: user mention detected")
+
         # Получить историю для этого канала с системными сообщениями
         history = self._get_channel_history(channel_id)
         
@@ -335,6 +356,21 @@ class ConversationCog(commands.Cog):
             combined_info_message = {"role": "user", "content": " ".join(info_parts), "name":message.author.name}
             # Вставляем перед последним сообщением пользователя
             history.insert(-1, combined_info_message)
+
+        # Собираем messages для GPT: история + временный контекст поиска (не сохраняем в историю)
+        messages_for_gpt = history
+        if search_context:
+            search_msg = {
+                "role": "system",
+                "content": (
+                    f"Результаты веб-поиска по запросу пользователя \"{message.content[:120]}\":\n"
+                    f"{search_context}\n"
+                    "Используй эту информацию для ответа. Если в результатах нет ответа — честно скажи что не нашел. "
+                    "Не выдумывай факты, опирайся на поиск."
+                    "Если твой овтет основан на данных поиска, то не пиши, что этот ответ сгенерирован на данных из поиска. Если ответа из поиска не нашлось, то отправь ссылку на ккакой-то из сайтов."
+                ),
+            }
+            messages_for_gpt += [search_msg]
         
         # Отправляем пустое сообщение-плейсхолдер с ответом на сообщение пользователя
         sent_message = await message.channel.send("💬 ...", reference=message)
@@ -344,7 +380,7 @@ class ConversationCog(commands.Cog):
 
         try:
             async with message.channel.typing():
-                async for chunk in self._chat_completion_with_rotation(messages=history, channel_id=channel_id):
+                async for chunk in self._chat_completion_with_rotation(messages=messages_for_gpt, channel_id=channel_id):
                     buffer += chunk
 
                     # Редактируем сообщение раз в N символов, чтобы не спамить
@@ -467,6 +503,7 @@ class ConversationCog(commands.Cog):
         max_retries = 20  # Максимальное количество попыток удаления сообщений
 
         for retry_attempt in range(max_retries):
+            logger.info(retry_attempt)
             last_error = None
             e_429 = False
             try:

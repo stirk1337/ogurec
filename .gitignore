@@ -7,6 +7,7 @@ __pycache__/
 *.db
 *.db-journal
 .venv
+test.py
 .idea/
 .idea
 .env
