@@ -1,0 +1,19 @@
+name: Docker image
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build --tag ogurec:${{ github.sha }} .
+      - name: Save image
+        run: docker save ogurec:${{ github.sha }} | gzip > ogurec-image.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ogurec-docker-image
+          path: ogurec-image.tar.gz
