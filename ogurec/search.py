@@ -16,68 +16,41 @@ VIDEO_BLOCKLIST = (
     "dailymotion.com", "twitch.tv", "rutube.ru", "bilibili.com", "coub.com",
 )
 
-CASUAL_PATTERNS = re.compile(
-    r"^(привет|прив|хай|хелло|хеллоу|салам|здаров[ао]?|ку|йо|спс|спасибо|пасиб|благодарю|"
-    r"ок|окей|норм|пон|ясно|ладно|угу|ага|да|нет|ага|неа|"
-    r"пока|бб|бай|ббай|до\s*свидания|увидимся|давай|удачи|"
-    r"добр(ое|ый)\s*(утро|день|вечер|ночи)|спокойной\s*ночи|сладких\s*снов|"
-    r"лол|кек|аха?х[ао]*|хехе?|хихи|прикол|прикольно|ору|ор|ржу|ржака|кринж|имба|гг|изи|го|погнали|летсго|"
-    r"го\s*играть|как\s*дела|как\s*ты|как\s*жизнь|че\s*как|чё\s*как|что\s*делаешь|чем\s*занят|как\s*сам|"
-    r"обнял|люблю|скучаю|сори|извини|сорян|<3|)[\s!?.]*$",
-    re.I,
-)
-WH_WORDS = re.compile(
-    r"\b(кто|что|когда|где|куда|откуда|почему|зачем|сколько|какой|какая|какое|какие|чей|чья|чьё|как|чем|какой|чо|че|расскажи"
-    r"who|what|when|where|why|how|which)\b",
-    re.I,
-)
-FACT_TRIGGERS = re.compile(
-    r"(чемпионат|турнир|лига|кубок|матч|сч[её]т|результат|финал|полуфинал|плей-офф|выйграл|выиграл|победил|чемпион|приз[её]р|медаль|"
-    r"босс|боссы|мини-босс|персона\s*\d|атлус|мегами|тартар|тень|тени|аркана|социалка|"
-    r"релиз|вышел|вышла|вышло|когда\s+вышел|дата\s+выхода|когда\s+выйдет|когда\s+релиз|анонс|патч|обновление|версия|дополнение|dlc|трейлер|тизер|"
-    r"курс|цена|стоимость|сколько\s+стоит|поч[её]м|курс\s+доллара|курс\s+евро|курс\s+биткоина|цена\s*игр|скидка|акция|распродажа|"
-    r"новости|событие|случилось|произошло|инцидент|авария|погода|прогноз|климат|температура|дата|год|месяц|неделя|время|расписание|дедлайн|сегодня|вчера|завтра|20\d{2}|19\d{2}|"
-    r"википедия|вики|где\s+находится|адрес|место|локация|координаты|как\s+добраться|расстояние|маршрут|"
-    r"кто\s+такой|что\s+такое|что\s+значит|что\s+означает|кто\s+создал|кто\s+автор|кто\s+режисс[её]р|кто\s+акт[её]р|кто\s+исполняет|биография|история\s+создания|состав|участники|"
-    r"как\s+называется|как\s+зовут|как\s+пройти|как\s+победить|как\s+установить|как\s+скачать|как\s+настроить|как\s+сделать|как\s+получить|инструкция|туториал|гайд|прохождение|секрет|пасхалка|"
-    r"кто\s+главный|что\s+за|почему|зачем|отчего|сколько|сколько\s+серий|сколько\s+длится|сколько\s+весит|сколько\s+времени|"
-    r"когда\s+будет|когда\s+выйдет|когда\s+старт|когда\s+начало|где\s+купить|где\s+скачать|где\s+посмотреть|где\s+найти|обзор|отзывы|рейтинг|оценка|топ|список|подборка|"
-    r"фильм|сериал|аниме|мультфильм|книга|манга|игра|песня|альбом|трек|группа|исполнитель|артист|персонаж|персонажи|герой|сюжет|концовка|финал\s+игры|"
-    r"рост|вес|возраст|население|площадь|высота|глубина|длина|ширина|объ[её]м|формула|теорема|закон|правило|определение|"
-    r"championship|tournament|league|cup|match|score|winner|won|champion|final|boss|release|price|course|exchange|rate|news|weather|wikipedia|wiki|where\s+is|who\s+is|what\s+is|how\s+to|when\s+did|how\s+much)",
-    re.I,
-)
-LINK_REQUEST = re.compile(
-    r"\b(скинь|скинешь|скиньте|кинь|кинешь|отправь|отправишь|найди|найди\s+мне|дай|дашь|покажи|накинь|закинь)\b.*\b(ссылк\w*|линк\w*|url)\b"
-    r"|\b(ссылк\w*|линк\w*)\b.*\b(скинь|кинь|дай|найди|нужна|нужен)\b",
-    re.I,
+# Системное сообщение для LLM-классификатора (используется в is_question_llm)
+LLM_SEARCH_SYSTEM_PROMPT = (
+    "Ты классификатор вопросов. Прочитав сообщение пользователя, определи является ли оно вопросом. "
+    "Если это вопрос — верни только одну букву Y. Если это не вопрос — верни только одну букву N."
+    "Если вопрос адресован боту и касается его состояния/действий (например: \"как дела\", \"что делаешь\", "
+    "\"чем занят\", \"как ты\", \"что делаешь сейчас\", \"как настроение\", \"как поживаешь\") — верни N, поиск не нужен."
+    "Отвечай строго одной буквой Y или N без пояснений, пробелов и переносов."
 )
 
-_MENTION_RE = re.compile(r"<@!?&?#?\d+>|<a?:\w+:\d+>")
-
-def clean_query_for_search(text: str) -> str:
-    q = _MENTION_RE.sub("", text)
-    q = re.sub(r"\s+", " ", q).strip()
-    return q[:200]
-
-def needs_search(text: str) -> bool:
+async def is_question_llm(text: str, gpt_client) -> str:
+    """
+    Одна функция которая определяет нужен ли поиск через chat_completion (auto:fast, temperature=0).
+    Возвращает 'Y' если нужен поиск (вопрос), 'N' если нет.
+    Использует системное сообщение LLM_SEARCH_SYSTEM_PROMPT.
+    """
     if not text or not text.strip():
         return False
-    t = text.strip()
-    low = t.lower()
-
-    has_wh = bool(WH_WORDS.search(t))
-    has_fact = bool(FACT_TRIGGERS.search(t))
-    has_q = "?" in t
-    
-    cleaned = re.sub(r"[^\w\sа-яёa-z]", "", low).strip()
-    if (CASUAL_PATTERNS.match(low) or CASUAL_PATTERNS.match(cleaned)):
+    if gpt_client is None:
         return False
-
-    if len(t) > 8 and (has_wh  and ((has_q or has_fact)) or (LINK_REQUEST.search(t))):
-        return True
-    
-    return False
+    messages = [
+        {"role": "system", "content": LLM_SEARCH_SYSTEM_PROMPT},
+        {"role": "user", "content": text[:500]},
+    ]
+    try:
+        result = ""
+        async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=5, model="auto:fast"):
+            result += chunk
+        cleaned = result.strip().upper()
+        logger.info(result)
+        if not cleaned:
+            return False
+        return True if cleaned[0] == "Y" else False
+    except Exception as e:
+        logger.warning(f"is_question_llm error: {e}")
+        return False
 
 def _is_blocked_url(url: str) -> bool:
     u = url.lower()
@@ -87,7 +60,7 @@ def _is_blocked_url(url: str) -> bool:
         return True
     if any(u.endswith(ext) for ext in (".mp4", ".avi", ".mov", ".webm", ".mkv")):
         return True
-    if "vk.com/video" in u or "vkvideo.ru" in u:
+    if "video" in u:
         return True
     if domain.endswith(".ua") or ".ua:" in domain:
         return True
@@ -112,7 +85,7 @@ def _searxng_search_sync(query: str, max_results: int = 5) -> Optional[str]:
                 logger.info(f"SearXNG нет резов '{query}'")
                 return None
             filtered = [r for r in results if not _is_blocked_url(r.get("url", ""))]
-            logger.info(f"SearXNG after blocklist={len(filtered)} for '{query[:40]}'")
+            logger.info(f"SearXNG после фильтрации={len(filtered)} for '{query[:40]}'")
             filtered = filtered[:max_results]
             if not filtered:
                 logger.info("SearXNG весь рез отфильтрован")
@@ -180,30 +153,27 @@ def _search_sync(query: str, max_results: int = 5) -> Optional[str]:
     return _ddgs_fallback(query, max_results)
 
 class SearchService:
-    def __init__(self, enabled: bool = True, max_results: int = 5, context_chars: int = 3500, **kwargs):
+    def __init__(self, enabled: bool = True, max_results: int = 5, context_chars: int = 3500, gpt_client=None, **kwargs):
         if "enable" in kwargs:
             enabled = kwargs["enable"]
         self.enabled = enabled
         self.max_results = max_results
         self.context_chars = context_chars
+        self.gpt_client = gpt_client
 
-
-    def should_search(self, text: str) -> bool:
+    async def should_search_llm(self, text: str) -> str:
+        """LLM-версия should_search: возвращает 'Y'/'N' через is_question_llm (auto:fast, temp 0)."""
         if not self.enabled:
             return False
-        return needs_search(text)
+        return await is_question_llm(text, self.gpt_client)
 
-    async def search(self, query: str) -> Optional[str]:
+    async def search(self, text: str) -> Optional[str]:
         if not self.enabled:
             return None
-        q = clean_query_for_search(query)
-        if not q:
-            return None
-        
         try:
-            result = await asyncio.to_thread(_search_sync, q, self.max_results)
+            result = await asyncio.to_thread(_search_sync, text, self.max_results)
             
             return result
         except Exception as e:
-            logger.warning(f"не смог найти '{q}': {e}")
+            logger.warning(f"не смог найти '{text}': {e}")
             return None
