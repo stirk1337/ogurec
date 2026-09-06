@@ -6,7 +6,9 @@ __pycache__/
 *.so
 *.db
 *.db-journal
+loldle.json
 .venv
+ogurec/activity/client/node_modules/
 test.py
 .idea/
 .idea

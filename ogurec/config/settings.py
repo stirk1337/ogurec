@@ -2,9 +2,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     discord_bot_token: str
-    klipy_api_key: str
-    gpt_api_key: str
-    steam_api_key: str
+    klipy_api_key: str = '1'
+    gpt_api_key: str = '1'
+    steam_api_key: str = '1'
     prefix: str = "!"
     bot_chat_id: int = 749662464538443948
     main_chat_id: int = 670981415306788870
@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     search_enabled: bool = True
     search_max_results: int = 5
     search_context_chars: int = 5000
+    discord_client_id: str
+    discord_client_secret: str
+    activity_host: str = "0.0.0.0"
+    activity_port: int = 18089
 
     users_discord_id: list[int] = [
         279945550432829441,  # artem
@@ -37,4 +41,3 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
     )
-

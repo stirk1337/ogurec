@@ -1,5 +1,6 @@
 import asyncio
 
+from ogurec.activity.server import start_activity_server
 from ogurec.bot import OgurecBot
 from ogurec.chatgpt import GPTClient
 from ogurec.cogs.activity.game_activity_cog import GameActivity
@@ -7,6 +8,7 @@ from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
 from ogurec.cogs.conversation_cog import ConversationCog
 from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.cogs.help_cog import Help
+from ogurec.cogs.loldle_cog import Loldle
 from ogurec.cogs.presence_game_cog import PresenceGameCog
 from ogurec.cogs.rebrand.rebrand_cog import Rebrand
 from ogurec.cogs.utils_cog import Utils
@@ -19,6 +21,7 @@ from ogurec.steam import SteamClient
 async def amain():
     settings = Settings()
     bot = OgurecBot(settings)
+    activity_server = await start_activity_server(settings)
 
     klipy_client = KlipyClient(settings.klipy_api_key, "1")
     gpt_client = GPTClient(settings.gpt_api_key, settings)
@@ -40,8 +43,12 @@ async def amain():
     conversation_cog = ConversationCog(bot, gpt_client, gif_storage, settings, activity_storage, search_service)
     await bot.add_cog(conversation_cog)
     await bot.add_cog(PresenceGameCog(bot, klipy_client, steam_client, settings, conversation_cog))
+    await bot.add_cog(Loldle(bot, activity_server))
 
-    await bot.start(token=settings.discord_bot_token)
+    try:
+        await bot.start(token=settings.discord_bot_token)
+    finally:
+        await activity_server.close()
 
 
 def main():
