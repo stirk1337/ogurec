@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     search_context_chars: int = 5000
     discord_client_id: str
     discord_client_secret: str
-    activity_host: str = "0.0.0.0"
+    activity_host: str = "127.0.0.1"
     activity_port: int = 18089
 
     users_discord_id: list[int] = [

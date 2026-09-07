@@ -3,6 +3,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+MODES = ("classic", "quote", "ability", "emoji", "splash")
 LOLDLE_TZ = ZoneInfo("Europe/Paris")
 STORE_PATH = Path("loldle.json")
 
@@ -13,6 +14,20 @@ def loldle_now() -> datetime:
 
 def loldle_day(now: datetime | None = None) -> str:
     return (now or loldle_now()).date().isoformat()
+
+
+def next_loldle(now: datetime | None = None) -> datetime:
+    current = now or loldle_now()
+    return (current + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def format_until_next(now: datetime | None = None) -> str:
+    total = max(0, int((next_loldle(now) - (now or loldle_now())).total_seconds()))
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    if hours:
+        return f"{hours} ч {minutes} мин"
+    return f"{minutes} мин"
 
 
 def previous_day(day: str) -> str:
@@ -31,6 +46,58 @@ def ru_days(n: int) -> str:
     if 2 <= mod10 <= 4 and (mod100 < 12 or mod100 > 14):
         return f"{n} дня"
     return f"{n} дней"
+
+
+def merge_mode(old: dict | None, new: dict | None) -> dict:
+    old = old or {}
+    new = new or {}
+    done = bool(old.get("done") or new.get("done"))
+    attempts = max(int(old.get("attempts") or 0), int(new.get("attempts") or 0))
+    cells_old = list(old.get("cells") or [])
+    cells_new = list(new.get("cells") or [])
+    cells = cells_new if len(cells_new) >= len(cells_old) else cells_old
+    return {"attempts": max(attempts, 1) if done else attempts, "done": done, "cells": cells}
+
+
+def merge_player(old: dict | None, new: dict | None) -> dict:
+    old = old or {}
+    new = new or {}
+    old_progress = old.get("progress") or {}
+    new_progress = new.get("progress") or {}
+    return {
+        **old,
+        **new,
+        "name": new.get("name") or old.get("name"),
+        "avatar": new.get("avatar") if new.get("avatar") is not None else old.get("avatar"),
+        "progress": {mode: merge_mode(old_progress.get(mode), new_progress.get(mode)) for mode in MODES},
+    }
+
+
+def resolve_channel_id(
+    player: dict,
+    instance_id: str,
+    instances: dict[str, int],
+    user_channels: dict[str, int],
+) -> int | None:
+    raw = player.get("channelId")
+    if raw not in (None, "", 0, "0"):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    mapped = instances.get(instance_id)
+    if mapped is not None:
+        return mapped
+    user_id = str(player.get("id") or "")
+    return user_channels.get(user_id)
+
+
+def session_is_live(*, has_sockets: bool, opened: bool, seen_at: float, now: float, grace: float) -> bool:
+    if has_sockets:
+        return True
+    if not opened:
+        return False
+    return now - seen_at < grace
 
 
 class LoldleStore:

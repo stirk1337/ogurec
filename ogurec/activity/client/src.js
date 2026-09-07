@@ -76,6 +76,12 @@ let user;
 let discord;
 let channelId = "";
 let lastClassicCells = [];
+let lastClassicDay = "";
+let remoteProgress = {};
+let lastSent = "";
+let socketGen = 0;
+let reconnectTimer = 0;
+let heartbeat = 0;
 
 function readJson(key, fallback) {
   try {
@@ -109,6 +115,11 @@ function championIconUrl(name) {
 }
 
 function classicCells() {
+  const day = loldleDay();
+  if (lastClassicDay !== day) {
+    lastClassicCells = [];
+    lastClassicDay = day;
+  }
   const root = document.querySelector(".classic-answers-container");
   if (!root) return lastClassicCells;
   const names = readJson("classic_answers", []);
@@ -169,17 +180,33 @@ function todayChampion(mode) {
   }
 }
 
+function loldleDay() {
+  return new Date().toLocaleDateString("en-CA", {timeZone: "Europe/Paris"});
+}
+
 function rememberedWon() {
-  const day = new Date().toISOString().slice(0, 10);
+  const day = loldleDay();
   const data = readJson("ogurecWon", {});
   if (data.day !== day) return {day, modes: {}};
   return {day, modes: data.modes || {}};
 }
 
-function rememberWon(mode) {
+function wonRecord(mode) {
+  const value = rememberedWon().modes[mode];
+  if (value && typeof value === "object") return value;
+  if (typeof value === "number") return {attempts: value, answer: ""};
+  return null;
+}
+
+function rememberWon(mode, attempts, answer) {
   const data = rememberedWon();
-  if (data.modes[mode]) return;
-  data.modes[mode] = true;
+  const next = {
+    attempts: Math.max(1, attempts || wonRecord(mode)?.attempts || 1),
+    answer: answer || todayChampion(mode) || wonRecord(mode)?.answer || "",
+  };
+  const prev = wonRecord(mode);
+  if (prev && prev.attempts === next.attempts && prev.answer === next.answer) return;
+  data.modes[mode] = next;
   localStorage.setItem("ogurecWon", JSON.stringify(data));
 }
 
@@ -192,34 +219,86 @@ function pageWon() {
   return won;
 }
 
-function modeDone(mode, _attempts, cells) {
-  if (rememberedWon().modes[mode]) return true;
+function liveAnswers(mode) {
+  const stored = readJson(`${mode}_answers`, []);
+  let vue = [];
+  walkVue((vm) => {
+    if (vm.options?.keyStorage?.answers === `${mode}_answers` && Array.isArray(vm.answers)) {
+      vue = vm.answers;
+    }
+  });
+  return vue.length >= stored.length ? vue : stored;
+}
+
+function guessedToday(mode) {
+  const answer = todayChampion(mode);
+  if (!answer) return false;
+  return liveAnswers(mode).some((guess) => guessValue(guess) === answer);
+}
+
+function modeDone(mode, attempts, cells) {
+  const answer = todayChampion(mode);
   const last = cells[cells.length - 1] || [];
   const attrs = last.filter((cell) => cell.k && cell.k !== "i");
-  if (mode === "classic" && attrs.length >= 6 && attrs.every((cell) => cell.k === "g")) {
-    rememberWon(mode);
+  const classicWin = mode === "classic" && attrs.length >= 6 && attrs.every((cell) => cell.k === "g");
+  if (classicWin) {
+    rememberWon(mode, attempts || cells.length, answer);
+    return true;
+  }
+  if (guessedToday(mode)) {
+    rememberWon(mode, attempts, answer);
     return true;
   }
   if (pathMode() === mode && pageWon()) {
-    rememberWon(mode);
+    rememberWon(mode, attempts || 1, answer);
     return true;
   }
-  const answer = todayChampion(mode);
-  if (answer && readJson(`${mode}_answers`, []).some((guess) => guessValue(guess) === answer)) {
-    rememberWon(mode);
+  const remembered = wonRecord(mode);
+  if (remembered && (!remembered.answer || !answer || remembered.answer === answer)) {
     return true;
   }
   return false;
 }
 
-function progress() {
+function cachedProgress() {
+  const data = readJson("ogurecProgress", {});
+  if (data.day !== loldleDay()) return {};
+  return data.progress || {};
+}
+
+function persistProgress(progress) {
+  localStorage.setItem("ogurecProgress", JSON.stringify({day: loldleDay(), progress}));
+}
+
+function mergeProgress(local, remote) {
   return Object.fromEntries(
     modes.map(([mode]) => {
-      const attempts = readJson(`${mode}_answers`, []).length;
-      const cells = mode === "classic" ? classicCells() : [];
-      return [mode, {attempts, done: modeDone(mode, attempts, cells), cells}];
+      const a = local?.[mode] || {};
+      const b = remote?.[mode] || {};
+      const done = !!(a.done || b.done);
+      const attempts = Math.max(a.attempts || 0, b.attempts || 0);
+      const cells = (b.cells?.length || 0) >= (a.cells?.length || 0) ? b.cells || [] : a.cells || [];
+      return [mode, {attempts: done ? Math.max(attempts, 1) : attempts, done, cells}];
     }),
   );
+}
+
+function localProgress() {
+  const live = Object.fromEntries(
+    modes.map(([mode]) => {
+      const cells = mode === "classic" ? classicCells() : [];
+      const answers = liveAnswers(mode);
+      let attempts = answers.length || (mode === "classic" ? cells.length : 0);
+      const done = modeDone(mode, attempts, cells);
+      if (done) attempts = attempts || wonRecord(mode)?.attempts || 1;
+      return [mode, {attempts, done, cells}];
+    }),
+  );
+  return mergeProgress(live, cachedProgress());
+}
+
+function progress() {
+  return mergeProgress(localProgress(), remoteProgress);
 }
 
 function finishedCount(player) {
@@ -329,6 +408,7 @@ function waitForSocket(socket) {
 }
 
 function snapshot() {
+  channelId = String(discord?.channelId || channelId || "");
   return {
     id: user.id,
     name: user.global_name || user.username,
@@ -338,12 +418,17 @@ function snapshot() {
   };
 }
 
-function publish() {
+function publish(force = false) {
   if (!user) return;
   const state = snapshot();
+  persistProgress(state.progress);
   players.set(user.id, state);
   render();
-  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(state));
+  const payload = JSON.stringify(state);
+  heartbeat += 1;
+  if (!force && payload === lastSent && heartbeat % 5 !== 0) return;
+  lastSent = payload;
+  if (ws?.readyState === WebSocket.OPEN) ws.send(payload);
   const done = finishedCount(state);
   discord?.commands.setActivity({
     activity: {
@@ -351,7 +436,7 @@ function publish() {
       details: `${done}/5 режимов`,
       state: modes.map(([mode, label]) => {
         const result = state.progress[mode];
-        if (result.done) return `${label} ${result.attempts}✓`;
+        if (result.done) return `${label} ${result.attempts || 1}`;
         if (result.attempts) return `${label} ${result.attempts}`;
         return null;
       }).find(Boolean) || "Классика",
@@ -362,6 +447,7 @@ function publish() {
 
 function removeUnrelated() {
   document.querySelector(".hub-games-container")?.remove();
+  document.querySelector(".hub-end")?.remove();
   document.querySelector(".worldsMayhemBanner")?.remove();
   document.querySelector(".worlds-mayhem")?.remove();
   document.querySelector(".foot")?.remove();
@@ -371,12 +457,47 @@ function removeUnrelated() {
   if (location.pathname.toLowerCase().includes("worlds")) location.replace("/");
 }
 
+function onSocketMessage(event) {
+  const state = JSON.parse(event.data);
+  if (!state?.id) return;
+  if (user && state.id === user.id) {
+    remoteProgress = state.progress || {};
+    persistProgress(progress());
+    players.set(user.id, snapshot());
+  } else {
+    players.set(state.id, state);
+  }
+  render();
+}
+
+function openSocket() {
+  const instance = discord.instanceId;
+  const gen = ++socketGen;
+  const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ogurec/socket?instance=${encodeURIComponent(instance)}`);
+  ws = socket;
+  socket.addEventListener("open", () => {
+    lastSent = "";
+    publish(true);
+  });
+  socket.addEventListener("message", onSocketMessage);
+  socket.addEventListener("close", () => {
+    if (gen !== socketGen) return;
+    if (!user || document.body.classList.contains("ogurec-locked")) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(openSocket, 800);
+  });
+  socket.addEventListener("error", () => {
+    socket.close();
+  });
+  return socket;
+}
+
 async function connectDiscord() {
   if (!clientId) throw new Error("DISCORD_CLIENT_ID is not configured");
   setGate("Подключение к Discord…");
   discord = new DiscordSDK(clientId);
   await discord.ready();
-  channelId = discord.channelId || "";
+  channelId = discord.channelId || channelId || "";
   setGate("Входим…");
   const {code} = await discord.commands.authorize({
     client_id: clientId,
@@ -395,24 +516,21 @@ async function connectDiscord() {
   }
   setGate("Открываем сессию…");
   ({user} = await discord.commands.authenticate({access_token: token.access_token}));
-  ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ogurec/socket?instance=${encodeURIComponent(discord.instanceId)}`);
-  ws.addEventListener("message", (event) => {
-    const state = JSON.parse(event.data);
-    if (state?.id) {
-      players.set(state.id, state);
-      render();
-    }
-  });
+  channelId = discord.channelId || channelId || "";
   setGate("Собираем игроков…");
-  await waitForSocket(ws);
+  await waitForSocket(openSocket());
 }
 
 async function start() {
   try {
     await connectDiscord();
     unlockGame();
-    publish();
-    setInterval(publish, 1000);
+    publish(true);
+    setInterval(() => publish(), 1000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") publish(true);
+    });
+    window.addEventListener("online", () => publish(true));
   } catch (error) {
     setGate(error.message, true);
     panel.querySelector(".ogurec-players").textContent = "Нет подключения";

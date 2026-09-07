@@ -28,7 +28,7 @@ IFRAME_CHECK = (
     "&&(this.isInIframe=!0)}catch(e){this.isInIframe=!0}}"
 )
 INDEX_BUNDLE = "js/index.9df01de2d504cd5f2472.1783962704014.js"
-ASSET_VERSION = "19"
+ASSET_VERSION = "22"
 WORLDS_OFF = (
     (
         "worldsMayhemAvailable(){return this.$store.state.game.worldsMayhemAvailable}",
@@ -45,6 +45,14 @@ WORLDS_OFF = (
     (
         'e.worldsMayhemAvailable&&e.isInGame&&!e.isWorldsMayhem?a("div",{staticClass:"worldsMayhemBanner"',
         'false&&e.isInGame&&!e.isWorldsMayhem?a("div",{staticClass:"worldsMayhemBanner"',
+    ),
+    (
+        'a("HubGamesEnd")',
+        "e._e()",
+    ),
+    (
+        'a("HubGames")',
+        "e._e()",
     ),
 )
 LOCALE_RU = (
@@ -89,6 +97,7 @@ class ActivityServer:
         self.rooms = defaultdict(set)
         self.states = defaultdict(dict)
         self.on_progress = None
+        self.on_idle = None
         self.session = aiohttp.ClientSession(auto_decompress=True)
         self.runner = None
 
@@ -139,6 +148,8 @@ class ActivityServer:
             await ws.close(code=1008, message=b"Missing instance")
             return ws
         self.rooms[room].add(ws)
+        for state in self.states.get(room, {}).values():
+            await ws.send_str(json.dumps(state))
         try:
             async for message in ws:
                 if message.type == aiohttp.WSMsgType.TEXT:
@@ -147,7 +158,11 @@ class ActivityServer:
             self.rooms[room].discard(ws)
             if not self.rooms[room]:
                 self.rooms.pop(room, None)
-                self.states.pop(room, None)
+                if self.on_idle:
+                    try:
+                        await self.on_idle(room)
+                    except Exception:
+                        logger.exception("Failed to close LoLdle session")
         return ws
 
     async def _publish(self, room, payload):
@@ -157,12 +172,15 @@ class ActivityServer:
         except ValueError:
             parsed = None
         if isinstance(parsed, dict) and parsed.get("id"):
-            self.states[room][parsed["id"]] = parsed
             if self.on_progress:
                 try:
-                    await self.on_progress(room, list(self.states[room].values()))
+                    merged = await self.on_progress(room, parsed)
+                    if isinstance(merged, dict) and merged.get("id"):
+                        parsed = merged
+                        payload = json.dumps(parsed)
                 except Exception:
                     logger.exception("Failed to update LoLdle scoreboard")
+            self.states[room][parsed["id"]] = parsed
         for peer in tuple(self.rooms[room]):
             if not peer.closed:
                 await peer.send_str(payload)
