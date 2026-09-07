@@ -7,6 +7,7 @@ __pycache__/
 *.db
 *.db-journal
 loldle.json
+/data/
 .venv
 ogurec/activity/client/node_modules/
 test.py

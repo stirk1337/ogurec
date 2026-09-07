@@ -3,9 +3,11 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from ogurec.config.paths import data_file
+
 MODES = ("classic", "quote", "ability", "emoji", "splash")
 LOLDLE_TZ = ZoneInfo("Europe/Paris")
-STORE_PATH = Path("loldle.json")
+STORE_PATH = data_file("loldle.json", "loldle.json")
 
 
 def loldle_now() -> datetime:
@@ -116,7 +118,10 @@ class LoldleStore:
             self.data = {"channels": {}}
 
     def save(self) -> None:
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=2))
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2))
+        tmp.replace(self.path)
 
     def channel(self, channel_id: int) -> dict:
         key = str(channel_id)

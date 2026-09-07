@@ -12,6 +12,7 @@ from ogurec.cogs.loldle_cog import Loldle
 from ogurec.cogs.presence_game_cog import PresenceGameCog
 from ogurec.cogs.rebrand.rebrand_cog import Rebrand
 from ogurec.cogs.utils_cog import Utils
+from ogurec.config.paths import data_file
 from ogurec.config.settings import Settings
 from ogurec.klipy import KlipyClient
 from ogurec.search import SearchService
@@ -26,8 +27,8 @@ async def amain():
     klipy_client = KlipyClient(settings.klipy_api_key, "1")
     gpt_client = GPTClient(settings.gpt_api_key, settings)
     steam_client = SteamClient(settings.steam_api_key)
-    gif_storage = GifStorage()
-    activity_storage = ActivityStorage()
+    gif_storage = GifStorage(str(data_file("gifs.db", "gifs.db")))
+    activity_storage = ActivityStorage(str(data_file("activity.db", "activity.db")))
     search_service = SearchService(
         enabled=settings.search_enabled,
         max_results=settings.search_max_results,
