@@ -466,6 +466,56 @@ function playTestSound() {
   audio.play().catch(() => playTestBeep());
 }
 
+const CLASSIC_TITLES = {
+  "Чемпион": "Чемп",
+  "Champion": "Champ",
+  "Позиция": "Поз.",
+  "Position": "Pos.",
+  "Виды": "Вид",
+  "Species": "Kind",
+  "Ресурс": "Рес.",
+  "Resource": "Res.",
+  "Тип диапазона": "Тип",
+  "Range type": "Range",
+  "Регион(ы)": "Регион",
+  "Region(s)": "Region",
+  "Год выпуска": "Год",
+  "Release year": "Year",
+};
+const CLASSIC_LEGEND = {
+  "Неправильно": "Неправ.",
+  "Incorrect": "Wrong",
+};
+
+function classicLang() {
+  return localStorage.getItem("currentLocale") === "EN" ? "en" : "ru";
+}
+
+function applyClassicLang() {
+  const lang = classicLang();
+  document.documentElement.lang = lang;
+  for (const node of document.querySelectorAll(".scrollable-answers-fit, .classic-answers-container, .tuto-colors")) {
+    node.setAttribute("lang", lang);
+  }
+}
+
+function rewriteCopy(nodes, map) {
+  for (const node of nodes) {
+    const text = node.textContent.replace(/\s+/g, " ").trim();
+    const next = map[text];
+    if (next && node.textContent !== next) node.textContent = next;
+  }
+}
+
+function shortenClassicTitles() {
+  applyClassicLang();
+  rewriteCopy(document.querySelectorAll(".square-title .square-content, .square-title .square-content-fit"), CLASSIC_TITLES);
+  rewriteCopy(
+    [...document.querySelectorAll(".tuto-color-container")].flatMap((node) => [...node.querySelectorAll("*")].filter((el) => !el.childElementCount)),
+    CLASSIC_LEGEND,
+  );
+}
+
 function mountTestSound() {
   const roots = document.querySelectorAll(".audio-player-top");
   for (const root of roots) {
@@ -579,9 +629,11 @@ async function start() {
 new MutationObserver(() => {
   removeUnrelated();
   mountTestSound();
-}).observe(document.body, {childList: true, subtree: true});
+  shortenClassicTitles();
+}).observe(document.body, {childList: true, subtree: true, characterData: true});
 removeUnrelated();
 mountTestSound();
+shortenClassicTitles();
 document.addEventListener("click", (event) => {
   if (!document.body.classList.contains("ogurec-locked")) return;
   if (event.target.closest(".ogurec-party, .ogurec-gate")) return;

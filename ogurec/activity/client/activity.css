@@ -245,6 +245,16 @@ body.ogurec-locked .ogurec-party {
   border-color: #38b9ff;
 }
 
+.scrollable-answers-fit {
+  --ogurec-cell: 10px;
+  --ogurec-label: 9px;
+  --ogurec-gap: 2px;
+  box-sizing: border-box;
+  padding-inline: max(var(--ogurec-gap), env(safe-area-inset-left, 0px)) max(var(--ogurec-gap), env(safe-area-inset-right, 0px));
+  -webkit-font-smoothing: antialiased;
+  touch-action: manipulation;
+  overscroll-behavior-x: none;
+}
 .scrollable-answers-fit,
 .scrollable-answers-fit .classic-answers-container {
   width: 100% !important;
@@ -255,21 +265,93 @@ body.ogurec-locked .ogurec-party {
   box-sizing: border-box;
 }
 .scrollable-answers-fit .square-container {
+  display: flex;
   width: 100%;
   flex-wrap: nowrap;
+  gap: var(--ogurec-gap);
 }
 .scrollable-answers-fit .square {
+  flex: 1 1 0;
   min-width: 0 !important;
+  margin-inline: 0 !important;
+}
+.scrollable-answers-fit .square:before {
+  padding-top: 128% !important;
+}
+.scrollable-answers-fit .square-title:before {
+  padding-top: 42% !important;
 }
 .scrollable-answers-fit .square-content,
 .scrollable-answers-fit .square-content-fit {
-  padding: 2px 1px !important;
+  display: flex !important;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 3px !important;
   overflow: hidden;
-  line-height: 1.15;
-  word-break: break-word;
-  font-size: clamp(8px, 2.3vw, 13px) !important;
+  color: #f0e6d2;
+  font-size: var(--ogurec-cell) !important;
+  font-weight: 600;
+  line-height: 1.18;
+  letter-spacing: 0;
+  text-align: center;
+  text-wrap: pretty;
+  white-space: normal;
+  font-variant-numeric: tabular-nums;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+  hyphenate-limit-chars: 8 4 4;
+}
+.scrollable-answers-fit .square img {
+  max-width: 86%;
+  max-height: 86%;
+  object-fit: cover;
+  align-self: center;
+  margin-inline: auto;
 }
 .scrollable-answers-fit .square-title .square-content,
 .scrollable-answers-fit .square-title .square-content-fit {
-  font-size: clamp(7px, 2vw, 11px) !important;
+  padding: 0 1px !important;
+  color: #c8aa6e;
+  font-size: var(--ogurec-label) !important;
+  font-weight: 600;
+  letter-spacing: .06em;
+  line-height: 1.1;
+  text-transform: uppercase;
+  text-wrap: balance;
+  hyphens: none;
+}
+
+.tuto-colors {
+  --ogurec-label: 9px;
+  width: 100% !important;
+  max-width: 100%;
+  margin: 12px 0 !important;
+  box-sizing: border-box;
+}
+.tuto-colors-container {
+  gap: 4px !important;
+  padding: 8px 4px !important;
+  flex-wrap: nowrap;
+}
+.tuto-color-container {
+  flex: 1 1 0 !important;
+  min-width: 0 !important;
+  padding: 0 2px !important;
+  color: #f0e6d2;
+  font-size: var(--ogurec-label, 9px) !important;
+  font-weight: 600;
+  line-height: 1.2 !important;
+  letter-spacing: .02em;
+  white-space: normal !important;
+  text-wrap: balance;
+}
+.tuto-color-container > div {
+  max-width: 100%;
+  overflow-wrap: break-word;
 }
