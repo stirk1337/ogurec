@@ -27,8 +27,8 @@
         break;
       }
     }
-    if (/\.ogg(\?|#|$)/i.test(next) && !/\.ogg\.mp3(\?|#|$)/i.test(next)) {
-      next = next.replace(/\.ogg(?=(\?|#|$))/i, ".ogg.mp3");
+    if (/\.ogg(\?|#|$)/i.test(next) && !/\.mp3(\?|#|$)/i.test(next)) {
+      next = next.replace(/\.ogg(?=(\?|#|$))/i, ".mp3");
     }
     return next;
   }

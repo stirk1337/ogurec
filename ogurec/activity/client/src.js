@@ -445,6 +445,45 @@ function publish(force = false) {
   }).catch(() => {});
 }
 
+function playTestBeep() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return Promise.reject(new Error("no audio"));
+  const ctx = new AudioCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = 880;
+  gain.gain.value = 0.12;
+  osc.connect(gain).connect(ctx.destination);
+  return ctx.resume().then(() => {
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.stop(ctx.currentTime + 0.45);
+  });
+}
+
+function playTestSound() {
+  const audio = new Audio("/ogurec/test-sound.wav");
+  audio.play().catch(() => playTestBeep());
+}
+
+function mountTestSound() {
+  const roots = document.querySelectorAll(".audio-player-top");
+  for (const root of roots) {
+    if (root.querySelector(".ogurec-test-sound")) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ogurec-test-sound";
+    button.textContent = "Тест звука";
+    button.title = "Проверка, что звук в Discord вообще играет";
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      playTestSound();
+    });
+    root.append(button);
+  }
+}
+
 function removeUnrelated() {
   document.querySelector(".hub-games-container")?.remove();
   document.querySelector(".hub-end")?.remove();
@@ -537,8 +576,12 @@ async function start() {
   }
 }
 
-new MutationObserver(removeUnrelated).observe(document.body, {childList: true, subtree: true});
+new MutationObserver(() => {
+  removeUnrelated();
+  mountTestSound();
+}).observe(document.body, {childList: true, subtree: true});
 removeUnrelated();
+mountTestSound();
 document.addEventListener("click", (event) => {
   if (!document.body.classList.contains("ogurec-locked")) return;
   if (event.target.closest(".ogurec-party, .ogurec-gate")) return;

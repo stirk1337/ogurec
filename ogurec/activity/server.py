@@ -1,7 +1,10 @@
 import asyncio
 import json
+import math
+import struct
 import tempfile
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 
 import aiohttp
@@ -41,7 +44,7 @@ IFRAME_CHECK = (
     "&&(this.isInIframe=!0)}catch(e){this.isInIframe=!0}}"
 )
 INDEX_BUNDLE = "js/index.9df01de2d504cd5f2472.1783962704014.js"
-ASSET_VERSION = "23"
+ASSET_VERSION = "25"
 WORLDS_OFF = (
     (
         "worldsMayhemAvailable(){return this.$store.state.game.worldsMayhemAvailable}",
@@ -105,6 +108,14 @@ MEDIA_REWRITE = (
         "this.isOGV=this.isOggFile&&Gt[\"a\"].isIOS()",
         "this.isOGV=!1",
     ),
+    (
+        "playHTML(){this.htmlPlayer.currentTime=0,this.htmlPlayer.load(),this.htmlPlayer.play()",
+        "playHTML(){this.htmlPlayer.play()",
+    ),
+    (
+        'initFitToScreen(){try{const e=localStorage.getItem("fit_to_screen");if(null!==e){const a=JSON.parse(e);"boolean"===typeof a?this.fitToScreen=a:(localStorage.removeItem("fit_to_screen"),this.fitToScreen=!1)}else this.fitToScreen=!1}catch(e){localStorage.removeItem("fit_to_screen"),this.fitToScreen=!1}}',
+        "initFitToScreen(){this.fitToScreen=!0}",
+    ),
 )
 
 
@@ -125,6 +136,7 @@ class ActivityServer:
         app.router.add_get("/ogurec/activity.js", self.asset)
         app.router.add_get("/ogurec/activity.css", self.asset)
         app.router.add_get("/ogurec/rewrite.js", self.asset)
+        app.router.add_get("/ogurec/test-sound.wav", self.test_sound)
         app.router.add_get("/ogurec/socket", self.socket)
         app.router.add_post("/ogurec/token", self.token)
         app.router.add_route("*", "/ogurec/proxy/{upstream}/{path:.*}", self.proxy)
@@ -208,9 +220,14 @@ class ActivityServer:
         upstream_name = request.match_info.get("upstream")
         upstream = UPSTREAMS.get(upstream_name, "https://loldle.net")
         path = request.match_info.get("path", "")
-        want_mp3 = path.lower().endswith(".ogg.mp3")
-        if want_mp3:
+        want_mp3 = False
+        lower = path.lower()
+        if lower.endswith(".ogg.mp3"):
             path = path[:-4]
+            want_mp3 = True
+        elif upstream_name in {"audio", "audio-i18n"} and lower.endswith(".mp3"):
+            path = f"{path[:-4]}.ogg"
+            want_mp3 = True
         url = f"{upstream}/{path}"
         if request.query_string:
             url += f"?{request.query_string}"
@@ -245,7 +262,7 @@ class ActivityServer:
                         f'<meta name="discord-client-id" content="{self.settings.discord_client_id}">'
                         f'<link rel="stylesheet" href="/ogurec/activity.css?ogurec={ASSET_VERSION}">'
                         f'<script src="/ogurec/rewrite.js?ogurec={ASSET_VERSION}"></script>'
-                        '<script>try{if(localStorage.getItem("ogurecLocale")!=="7"){if(!localStorage.getItem("currentLocale")||localStorage.getItem("currentLocale")==="EN")localStorage.setItem("currentLocale","RU");localStorage.setItem("ogurecLocale","7")}}catch(e){}</script>'
+                        '<script>try{if(localStorage.getItem("ogurecLocale")!=="7"){if(!localStorage.getItem("currentLocale")||localStorage.getItem("currentLocale")==="EN")localStorage.setItem("currentLocale","RU");localStorage.setItem("ogurecLocale","7")}localStorage.setItem("fit_to_screen","true")}catch(e){}</script>'
                         f'<script type="module" src="/ogurec/activity.js?ogurec={ASSET_VERSION}"></script>'
                     )
                     text = text.replace("</head>", f"{injection}</head>")
@@ -306,6 +323,8 @@ class ActivityServer:
                 "libmp3lame",
                 "-q:a",
                 "5",
+                "-id3v2_version",
+                "0",
                 dst.name,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
@@ -322,34 +341,47 @@ class ActivityServer:
             Path(src.name).unlink(missing_ok=True)
             Path(dst.name).unlink(missing_ok=True)
 
+    async def test_sound(self, request):
+        return self._media_response(request, test_sound_wav(), "audio/wav")
+
     def _media_response(self, request, body: bytes, content_type: str, status: int = 200):
         headers = {
-            "Accept-Ranges": "bytes",
             "Access-Control-Allow-Origin": "*",
             "Cache-Control": "public, max-age=86400",
+            "Content-Type": content_type,
+            "Content-Length": str(len(body)),
         }
-        rng = request.headers.get("Range", "")
         if request.method == "HEAD":
-            headers["Content-Length"] = str(len(body))
-            return web.Response(status=200, content_type=content_type, headers=headers)
-        if status == 200 and rng.startswith("bytes="):
-            spec = rng.split("=", 1)[1]
-            start_s, _, end_s = spec.partition("-")
-            try:
-                start = int(start_s) if start_s else 0
-                end = int(end_s) if end_s else len(body) - 1
-            except ValueError:
-                start, end = 0, len(body) - 1
-            end = min(max(end, start), len(body) - 1)
-            start = min(max(start, 0), end)
-            headers["Content-Range"] = f"bytes {start}-{end}/{len(body)}"
-            return web.Response(
-                body=body[start : end + 1],
-                status=206,
-                content_type=content_type,
-                headers=headers,
-            )
-        return web.Response(body=body, status=status, content_type=content_type, headers=headers)
+            return web.Response(status=200, headers=headers)
+        return web.Response(body=body, status=status, headers=headers)
+
+
+@lru_cache(maxsize=1)
+def test_sound_wav() -> bytes:
+    rate = 22050
+    n = int(rate * 0.35)
+    samples = bytearray()
+    for index in range(n):
+        fade = min(1.0, index / 300, (n - index) / 700)
+        value = int(14000 * fade * math.sin(2 * math.pi * 880 * index / rate))
+        samples += struct.pack("<h", value)
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        36 + len(samples),
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,
+        1,
+        rate,
+        rate * 2,
+        2,
+        16,
+        b"data",
+        len(samples),
+    )
+    return header + bytes(samples)
 
 
 async def start_activity_server(settings):

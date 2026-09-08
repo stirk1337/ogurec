@@ -223,3 +223,53 @@ body.ogurec-locked .ogurec-party {
 }
 .ogurec-scores i.active { background: #dc830d; }
 .ogurec-scores i.done { background: #09c02d; }
+
+.ogurec-test-sound {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  color: #c8aa6e;
+  background: rgba(18, 36, 52, .92);
+  border: 1px solid rgba(200, 170, 110, .55);
+  border-radius: 4px;
+  cursor: pointer;
+  font: 12px/1 "Source Sans Pro", sans-serif;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.ogurec-test-sound:hover,
+.ogurec-test-sound:focus-visible {
+  color: #f0e6d2;
+  border-color: #38b9ff;
+}
+
+.scrollable-answers-fit,
+.scrollable-answers-fit .classic-answers-container {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  overflow-x: hidden !important;
+  box-sizing: border-box;
+}
+.scrollable-answers-fit .square-container {
+  width: 100%;
+  flex-wrap: nowrap;
+}
+.scrollable-answers-fit .square {
+  min-width: 0 !important;
+}
+.scrollable-answers-fit .square-content,
+.scrollable-answers-fit .square-content-fit {
+  padding: 2px 1px !important;
+  overflow: hidden;
+  line-height: 1.15;
+  word-break: break-word;
+  font-size: clamp(8px, 2.3vw, 13px) !important;
+}
+.scrollable-answers-fit .square-title .square-content,
+.scrollable-answers-fit .square-title .square-content-fit {
+  font-size: clamp(7px, 2vw, 11px) !important;
+}
