@@ -507,13 +507,44 @@ function rewriteCopy(nodes, map) {
   }
 }
 
-function shortenClassicTitles() {
+function classicCellOverflows(cell) {
+  if (cell.scrollHeight > cell.clientHeight + 1) return true;
+  for (const node of cell.querySelectorAll("span, div")) {
+    if (node.childElementCount || !node.textContent.trim()) continue;
+    node.style.setProperty("white-space", "nowrap", "important");
+    const overflow = node.scrollWidth > node.clientWidth + 1;
+    node.style.removeProperty("white-space");
+    if (overflow) return true;
+  }
+  return false;
+}
+
+function fitClassicCells() {
+  for (const cell of document.querySelectorAll(".scrollable-answers-fit .square:not(.square-title) .square-content")) {
+    if (cell.querySelector("img, canvas")) continue;
+    cell.style.removeProperty("font-size");
+    let px = parseFloat(getComputedStyle(cell).fontSize) || 9;
+    for (let i = 0; i < 8 && classicCellOverflows(cell); i += 1) {
+      px = Math.max(6.5, px - 0.5);
+      cell.style.setProperty("font-size", `${px}px`, "important");
+    }
+  }
+}
+
+let classicFitFrame = 0;
+function scheduleClassicFit() {
   applyClassicLang();
   rewriteCopy(document.querySelectorAll(".square-title .square-content, .square-title .square-content-fit"), CLASSIC_TITLES);
   rewriteCopy(
     [...document.querySelectorAll(".tuto-color-container")].flatMap((node) => [...node.querySelectorAll("*")].filter((el) => !el.childElementCount)),
     CLASSIC_LEGEND,
   );
+  cancelAnimationFrame(classicFitFrame);
+  classicFitFrame = requestAnimationFrame(fitClassicCells);
+}
+
+function shortenClassicTitles() {
+  scheduleClassicFit();
 }
 
 function mountTestSound() {

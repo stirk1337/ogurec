@@ -44,7 +44,7 @@ IFRAME_CHECK = (
     "&&(this.isInIframe=!0)}catch(e){this.isInIframe=!0}}"
 )
 INDEX_BUNDLE = "js/index.9df01de2d504cd5f2472.1783962704014.js"
-ASSET_VERSION = "27"
+ASSET_VERSION = "28"
 WORLDS_OFF = (
     (
         "worldsMayhemAvailable(){return this.$store.state.game.worldsMayhemAvailable}",

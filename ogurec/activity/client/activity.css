@@ -246,8 +246,8 @@ body.ogurec-locked .ogurec-party {
 }
 
 .scrollable-answers-fit {
-  --ogurec-cell: 10px;
-  --ogurec-label: 9px;
+  --ogurec-cell: 9px;
+  --ogurec-label: 8px;
   --ogurec-gap: 2px;
   box-sizing: border-box;
   padding-inline: max(var(--ogurec-gap), env(safe-area-inset-left, 0px)) max(var(--ogurec-gap), env(safe-area-inset-right, 0px));
@@ -285,27 +285,44 @@ body.ogurec-locked .ogurec-party {
 .scrollable-answers-fit .square-content-fit {
   display: flex !important;
   flex-direction: column;
-  align-items: stretch;
+  align-items: stretch !important;
   justify-content: center;
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 4px 3px !important;
+  padding: 4px 2px !important;
   overflow: hidden;
   color: #f0e6d2;
   font-size: var(--ogurec-cell) !important;
   font-weight: 600;
-  line-height: 1.18;
+  line-height: 1.12;
   letter-spacing: 0;
   text-align: center;
-  text-wrap: pretty;
-  white-space: normal;
+  white-space: normal !important;
   font-variant-numeric: tabular-nums;
-  word-break: normal;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
+  word-break: break-word !important;
   hyphens: auto;
   -webkit-hyphens: auto;
-  hyphenate-limit-chars: 8 4 4;
+  hyphenate-limit-chars: 6 3 2;
+}
+.scrollable-answers-fit .square-content > div,
+.scrollable-answers-fit .square-content span,
+.scrollable-answers-fit .square-content .small-text,
+.scrollable-answers-fit .square-content .smaller-text,
+.scrollable-answers-fit .square-content .smallest-text {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-size: inherit !important;
+  line-height: inherit;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word !important;
+  hyphens: auto;
+  -webkit-hyphens: auto;
 }
 .scrollable-answers-fit .square img {
   max-width: 86%;
