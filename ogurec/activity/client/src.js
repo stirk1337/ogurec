@@ -1,6 +1,7 @@
 import {DiscordSDK} from "@discord/embedded-app-sdk";
 import CryptoJS from "crypto-js";
 import {clickGuessIsCorrect, enterGuessIsCorrect} from "./guess.js";
+import {createResetSession, isResetAck, resetPayload} from "./reset.js";
 
 const modes = [
   ["classic", "Классика"],
@@ -22,6 +23,13 @@ panel.innerHTML = `
   <div id="ogurec-party-body" class="ogurec-party-body">
     <div class="ogurec-players">Ждём игроков…</div>
     <button type="button" class="ogurec-reset">Сбросить вашу статистику</button>
+    <div class="ogurec-reset-confirm" hidden>
+      <p>Прогресс сотрётся из Discord, с картинки в чате, cookies и localStorage.</p>
+      <div class="ogurec-reset-actions">
+        <button type="button" class="ogurec-reset-no">Отмена</button>
+        <button type="button" class="ogurec-reset-yes">Сбросить</button>
+      </div>
+    </div>
   </div>
 `;
 document.body.append(panel);
@@ -53,6 +61,10 @@ toggle.addEventListener("click", () => setPartyOpen(panel.classList.contains("is
 setPartyOpen(localStorage.getItem("ogurecPartyOpen") === "1");
 
 const resetButton = panel.querySelector(".ogurec-reset");
+const resetConfirm = panel.querySelector(".ogurec-reset-confirm");
+const resetYes = panel.querySelector(".ogurec-reset-yes");
+const resetNo = panel.querySelector(".ogurec-reset-no");
+const resetSession = createResetSession();
 let resetting = false;
 let knownDone = null;
 let winBuzzTimer = 0;
@@ -698,31 +710,42 @@ function waitForResetAck(userId, ms = 20000) {
     };
     const timer = setTimeout(() => finish(false), ms);
     function onMessage(event) {
-      try {
-        const state = JSON.parse(event.data);
-        if (state?.type === "reset" && String(state.id) === String(userId)) finish(true);
-      } catch {}
+      if (isResetAck(event.data, userId)) finish(true);
     }
     ws.addEventListener("message", onMessage);
   });
 }
 
+function syncResetUi() {
+  const asking = resetSession.phase === "confirm" || resetSession.phase === "wiping";
+  panel.classList.toggle("is-confirming", asking);
+  resetConfirm.hidden = !asking;
+  resetButton.hidden = asking;
+}
+
+function setResetConfirmOpen(open) {
+  if (open) resetSession.request();
+  else resetSession.cancel();
+  syncResetUi();
+  if (resetSession.phase === "confirm") setPartyOpen(true);
+}
+
 async function resetMyStats() {
-  if (resetting) return;
-  if (!window.confirm("Сбросить вашу статистику LoLdle? Прогресс сотрётся из Discord, картинки в чате, cookies и localStorage.")) {
-    return;
-  }
+  if (resetting || !resetSession.beginWipe()) return;
   resetting = true;
+  syncResetUi();
   resetButton.disabled = true;
+  resetYes.disabled = true;
+  resetNo.disabled = true;
+  resetYes.textContent = "Сбрасываем…";
   const ack = user ? waitForResetAck(user.id) : Promise.resolve(false);
   if (user && ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      type: "reset",
+    ws.send(JSON.stringify(resetPayload({
       id: user.id,
       channelId: readChannelId(),
       instanceId: String(discord?.instanceId || ""),
       day: loldleDay(),
-    }));
+    })));
   }
   await ack;
   try {
@@ -740,7 +763,14 @@ async function resetMyStats() {
 }
 
 resetButton.addEventListener("click", (event) => {
-  event.preventDefault();
+  event.stopPropagation();
+  setResetConfirmOpen(true);
+});
+resetNo.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setResetConfirmOpen(false);
+});
+resetYes.addEventListener("click", (event) => {
   event.stopPropagation();
   resetMyStats();
 });
@@ -987,7 +1017,7 @@ document.addEventListener("click", (event) => {
 document.addEventListener("pointerdown", maybeBuzzCorrectGuess, true);
 document.addEventListener("click", (event) => {
   if (document.body.classList.contains("ogurec-locked")) return;
-  if (event.target.closest(".ogurec-party, .ogurec-gate, .ogurec-reset")) return;
+  if (event.target.closest(".ogurec-party, .ogurec-gate, .ogurec-reset, .ogurec-reset-confirm")) return;
   maybeBuzzCorrectGuess(event);
   scheduleWinBuzz();
 }, true);
