@@ -1,6 +1,7 @@
 import {DiscordSDK} from "@discord/embedded-app-sdk";
 import CryptoJS from "crypto-js";
 import {clickGuessIsCorrect, enterGuessIsCorrect} from "./guess.js";
+import {mergeProgress, modalWinAttempts, modeSnapshot} from "./progress.js";
 import {createResetSession, isResetAck, resetPayload} from "./reset.js";
 
 const modes = [
@@ -69,6 +70,8 @@ let resetting = false;
 let knownDone = null;
 let winBuzzTimer = 0;
 let iosBuzzedMode = "";
+const readyModes = new Set();
+let lastPlayedMode = "";
 
 const players = new Map();
 const championSlug = {
@@ -144,14 +147,14 @@ function classicCells() {
     lastClassicCells = [];
     lastClassicDay = day;
   }
-  if (!modeReady("classic")) return [];
   const root = document.querySelector(".classic-answers-container");
   if (!root) return lastClassicCells;
   const names = readJson("classic_answers", []);
   const rows = [...root.querySelectorAll(".classic-answer")].map((row, index) => {
-    const squares = [...row.querySelectorAll(".square-container > .square")]
-      .filter((el) => getComputedStyle(el).display !== "none");
-    const cells = squares.map((el, cellIndex) => {
+    const squares = [...row.querySelectorAll(".square-container > .square")];
+    const visible = squares.filter((el) => getComputedStyle(el).display !== "none");
+    const useSquares = visible.length ? visible : squares;
+    const cells = useSquares.map((el, cellIndex) => {
       const kind = cellKind(el.className);
       const name = typeof names[index] === "string" ? names[index] : names[index]?.value;
       return {
@@ -185,6 +188,15 @@ function walkVue(visit) {
 
 const LOLDLE_KEY = "QhDZJfngdx";
 
+function vueKeyStorage(vm) {
+  const options = vm?.$options || vm?.options || {};
+  if (options.keyStorage) return options.keyStorage;
+  for (const mixin of options.mixins || []) {
+    if (mixin?.keyStorage) return mixin.keyStorage;
+  }
+  return vm?.keyStorage || null;
+}
+
 function pathMode() {
   const slug = location.pathname.toLowerCase().split("/").filter(Boolean)[0] || "";
   return modes.some(([mode]) => mode === slug) ? slug : "";
@@ -193,7 +205,7 @@ function pathMode() {
 function vueMode(mode) {
   let found = null;
   walkVue((vm) => {
-    if (vm.options?.keyStorage?.answers === `${mode}_answers`) found = vm;
+    if (vueKeyStorage(vm)?.answers === `${mode}_answers`) found = vm;
   });
   return found;
 }
@@ -203,15 +215,9 @@ function modeReady(mode) {
   return Boolean(vm && vm.todayAnswerDecrypted);
 }
 
-function guessValue(entry) {
-  if (typeof entry === "string") return entry;
-  return String(entry?.value || entry?.name || "");
-}
-
 function todayChampion(mode) {
   const live = vueMode(mode)?.todayAnswerDecrypted;
   if (live) return String(live);
-  if (!modeReady(mode)) return "";
   const encrypted = localStorage.getItem(`${mode}_today_answer`);
   if (!encrypted) return "";
   try {
@@ -251,47 +257,51 @@ function rememberWon(mode, attempts, answer) {
   localStorage.setItem("ogurecWon", JSON.stringify(data));
 }
 
+function inferredMode() {
+  if (pathMode()) return pathMode();
+  if (lastPlayedMode) return lastPlayedMode;
+  if (document.querySelector(".classic-answers-container, .classic-answer")) return "classic";
+  if (document.querySelector(".audio-player-top")) return "quote";
+  return "";
+}
+
 function pageWon(mode) {
   const vm = vueMode(mode);
-  if (!vm) return false;
-  return Boolean(vm.won || vm.finished || vm.endFinished);
+  if (vm && (vm.won || vm.finished || vm.endFinished || vm.hasWon)) return true;
+  return inferredMode() === mode && modalWinAttempts(document.body.innerText || "") > 0;
 }
 
 function liveAnswers(mode) {
-  if (!modeReady(mode)) return [];
   const stored = readJson(`${mode}_answers`, []);
   const vue = vueMode(mode)?.answers;
   const fromVue = Array.isArray(vue) ? vue : [];
   return fromVue.length >= stored.length ? fromVue : stored;
 }
 
-function guessedToday(mode) {
-  const answer = todayChampion(mode);
-  if (!answer) return false;
-  return liveAnswers(mode).some((guess) => guessValue(guess) === answer);
-}
-
-function modeDone(mode, attempts, cells) {
-  const remembered = wonRecord(mode);
-  if (remembered) return true;
-  if (!modeReady(mode)) return false;
-  const answer = todayChampion(mode);
-  const last = cells[cells.length - 1] || [];
-  const attrs = last.filter((cell) => cell.k && cell.k !== "i");
-  const classicWin = mode === "classic" && attrs.length >= 6 && attrs.every((cell) => cell.k === "g");
-  if (classicWin) {
-    rememberWon(mode, attempts || cells.length, answer);
-    return true;
-  }
-  if (guessedToday(mode)) {
-    rememberWon(mode, attempts, answer);
-    return true;
-  }
-  if (pathMode() === mode && pageWon(mode)) {
-    rememberWon(mode, attempts || 1, answer);
-    return true;
-  }
-  return false;
+function localProgress() {
+  if (pathMode()) lastPlayedMode = pathMode();
+  const route = inferredMode();
+  const modalAttempts = modalWinAttempts(document.body.innerText || "");
+  const live = Object.fromEntries(
+    modes.map(([mode]) => {
+      if (modeReady(mode)) readyModes.add(mode);
+      const remembered = wonRecord(mode) || (route === mode && modalAttempts ? {attempts: modalAttempts} : null);
+      const snap = modeSnapshot({
+        mode,
+        pathMode: route,
+        modeReady: modeReady(mode),
+        seenReady: readyModes.has(mode),
+        remembered,
+        answer: todayChampion(mode),
+        answers: liveAnswers(mode),
+        cells: mode === "classic" ? classicCells() : [],
+        pageWon: pageWon(mode),
+      });
+      if (snap.done) rememberWon(mode, snap.attempts, todayChampion(mode));
+      return [mode, snap];
+    }),
+  );
+  return mergeProgress(live, cachedProgress());
 }
 
 function cachedProgress() {
@@ -302,37 +312,6 @@ function cachedProgress() {
 
 function persistProgress(progress) {
   localStorage.setItem("ogurecProgress", JSON.stringify({day: loldleDay(), progress}));
-}
-
-function mergeProgress(local, remote) {
-  return Object.fromEntries(
-    modes.map(([mode]) => {
-      const a = local?.[mode] || {};
-      const b = remote?.[mode] || {};
-      const done = !!(a.done || b.done);
-      const attempts = Math.max(a.attempts || 0, b.attempts || 0);
-      const cells = (b.cells?.length || 0) >= (a.cells?.length || 0) ? b.cells || [] : a.cells || [];
-      return [mode, {attempts: done ? Math.max(attempts, 1) : attempts, done, cells}];
-    }),
-  );
-}
-
-function localProgress() {
-  const live = Object.fromEntries(
-    modes.map(([mode]) => {
-      const remembered = wonRecord(mode);
-      if (!modeReady(mode) && !remembered) {
-        return [mode, {attempts: 0, done: false, cells: []}];
-      }
-      const cells = mode === "classic" ? classicCells() : [];
-      const answers = liveAnswers(mode);
-      let attempts = answers.length || (mode === "classic" ? cells.length : 0);
-      const done = modeDone(mode, attempts, cells);
-      if (done) attempts = attempts || remembered?.attempts || 1;
-      return [mode, {attempts, done, cells}];
-    }),
-  );
-  return mergeProgress(live, cachedProgress());
 }
 
 function sameDayProgress(payload) {
@@ -555,6 +534,7 @@ function unlockGame() {
     document.body.classList.remove("ogurec-locked");
     gate.remove();
     seedKnownDone();
+    publish(true);
   }, 180);
 }
 
@@ -610,6 +590,7 @@ function snapshot() {
 
 function publish(force = false) {
   if (!user || resetting) return;
+  if (document.body.classList.contains("ogurec-locked")) return;
   const state = snapshot();
   persistProgress(state.progress);
   celebrateWins(state.progress);
@@ -903,7 +884,7 @@ function removeUnrelated() {
   document.querySelector(".foot")?.remove();
   document.querySelector(".button-worlds-badge")?.closest(".button-game")?.remove();
   document.querySelector("#menu > .buttons-container:has(.button-worlds-badge)")?.remove();
-  document.querySelectorAll(".share, .complete-share, .settings.top-button, .store-buttons, #modal, #overlay, .overlay-container, .container-app-forwarder").forEach((el) => el.remove());
+  document.querySelectorAll(".settings.top-button, .store-buttons, .container-app-forwarder").forEach((el) => el.remove());
   if (location.pathname.toLowerCase().includes("worlds")) location.replace("/");
 }
 
@@ -988,7 +969,6 @@ async function start() {
   try {
     await connectDiscord();
     unlockGame();
-    publish(true);
     setInterval(() => publish(), 1000);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") publish(true);

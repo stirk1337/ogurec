@@ -70,6 +70,17 @@ class LoldleStoreTests(unittest.TestCase):
         self.assertEqual(len(self.store.today_players(10)), 1)
         self.assertFalse(self.store.today_players(10)[0]["progress"]["classic"]["done"])
 
+    def test_second_device_done_overwrites_yellow(self):
+        self.now = at("2026-09-09")
+        yellow = player("1", day="2026-09-09", done=False)
+        yellow["progress"]["classic"]["attempts"] = 4
+        self.store.upsert_player(10, yellow)
+        done = player("1", day="2026-09-09", done=True)
+        done["progress"]["classic"]["attempts"] = 1
+        stored = self.store.upsert_player(10, done)
+        self.assertTrue(stored["progress"]["classic"]["done"])
+        self.assertEqual(stored["progress"]["classic"]["attempts"], 4)
+
     def test_upsert_does_not_require_reset(self):
         self.now = at("2026-09-09")
         stored = self.store.upsert_player(10, player("7", day="2026-09-09"))
