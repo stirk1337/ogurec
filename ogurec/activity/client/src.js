@@ -1,5 +1,6 @@
 import {DiscordSDK} from "@discord/embedded-app-sdk";
 import CryptoJS from "crypto-js";
+import {clickGuessIsCorrect, enterGuessIsCorrect} from "./guess.js";
 
 const modes = [
   ["classic", "Классика"],
@@ -20,6 +21,7 @@ panel.innerHTML = `
   </button>
   <div id="ogurec-party-body" class="ogurec-party-body">
     <div class="ogurec-players">Ждём игроков…</div>
+    <button type="button" class="ogurec-reset">Сбросить вашу статистику</button>
   </div>
 `;
 document.body.append(panel);
@@ -28,9 +30,12 @@ const gate = document.createElement("div");
 gate.className = "ogurec-gate";
 gate.innerHTML = `
   <div class="ogurec-gate-card">
-    <div class="ogurec-loader" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
     <strong>Играют вместе</strong>
-    <p class="ogurec-gate-status">Подключение к Discord…</p>
+    <div class="ogurec-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="8" aria-labelledby="ogurec-gate-status">
+      <span class="ogurec-progress-fill" style="width:8%"></span>
+      <span class="ogurec-progress-pct">8%</span>
+    </div>
+    <p class="ogurec-gate-status" id="ogurec-gate-status">Подключение к Discord…</p>
   </div>
 `;
 document.body.classList.add("ogurec-locked");
@@ -46,6 +51,12 @@ function setPartyOpen(open) {
 }
 toggle.addEventListener("click", () => setPartyOpen(panel.classList.contains("is-closed")));
 setPartyOpen(localStorage.getItem("ogurecPartyOpen") === "1");
+
+const resetButton = panel.querySelector(".ogurec-reset");
+let resetting = false;
+let knownDone = null;
+let winBuzzTimer = 0;
+let iosBuzzedMode = "";
 
 const players = new Map();
 const championSlug = {
@@ -78,6 +89,7 @@ let channelId = "";
 let lastClassicCells = [];
 let lastClassicDay = "";
 let remoteProgress = {};
+let remoteDay = "";
 let lastSent = "";
 let socketGen = 0;
 let reconnectTimer = 0;
@@ -120,6 +132,7 @@ function classicCells() {
     lastClassicCells = [];
     lastClassicDay = day;
   }
+  if (!modeReady("classic")) return [];
   const root = document.querySelector(".classic-answers-container");
   if (!root) return lastClassicCells;
   const names = readJson("classic_answers", []);
@@ -161,8 +174,21 @@ function walkVue(visit) {
 const LOLDLE_KEY = "QhDZJfngdx";
 
 function pathMode() {
-  const slug = location.pathname.toLowerCase().split("/").filter(Boolean)[0] || "classic";
+  const slug = location.pathname.toLowerCase().split("/").filter(Boolean)[0] || "";
   return modes.some(([mode]) => mode === slug) ? slug : "";
+}
+
+function vueMode(mode) {
+  let found = null;
+  walkVue((vm) => {
+    if (vm.options?.keyStorage?.answers === `${mode}_answers`) found = vm;
+  });
+  return found;
+}
+
+function modeReady(mode) {
+  const vm = vueMode(mode);
+  return Boolean(vm && vm.todayAnswerDecrypted);
 }
 
 function guessValue(entry) {
@@ -171,6 +197,9 @@ function guessValue(entry) {
 }
 
 function todayChampion(mode) {
+  const live = vueMode(mode)?.todayAnswerDecrypted;
+  if (live) return String(live);
+  if (!modeReady(mode)) return "";
   const encrypted = localStorage.getItem(`${mode}_today_answer`);
   if (!encrypted) return "";
   try {
@@ -210,24 +239,18 @@ function rememberWon(mode, attempts, answer) {
   localStorage.setItem("ogurecWon", JSON.stringify(data));
 }
 
-function pageWon() {
-  if (document.querySelector(".finished")) return true;
-  let won = false;
-  walkVue((vm) => {
-    if (vm.won || vm.finished || vm.endFinished || vm.options?.won) won = true;
-  });
-  return won;
+function pageWon(mode) {
+  const vm = vueMode(mode);
+  if (!vm) return false;
+  return Boolean(vm.won || vm.finished || vm.endFinished);
 }
 
 function liveAnswers(mode) {
+  if (!modeReady(mode)) return [];
   const stored = readJson(`${mode}_answers`, []);
-  let vue = [];
-  walkVue((vm) => {
-    if (vm.options?.keyStorage?.answers === `${mode}_answers` && Array.isArray(vm.answers)) {
-      vue = vm.answers;
-    }
-  });
-  return vue.length >= stored.length ? vue : stored;
+  const vue = vueMode(mode)?.answers;
+  const fromVue = Array.isArray(vue) ? vue : [];
+  return fromVue.length >= stored.length ? fromVue : stored;
 }
 
 function guessedToday(mode) {
@@ -237,6 +260,9 @@ function guessedToday(mode) {
 }
 
 function modeDone(mode, attempts, cells) {
+  const remembered = wonRecord(mode);
+  if (remembered) return true;
+  if (!modeReady(mode)) return false;
   const answer = todayChampion(mode);
   const last = cells[cells.length - 1] || [];
   const attrs = last.filter((cell) => cell.k && cell.k !== "i");
@@ -249,12 +275,8 @@ function modeDone(mode, attempts, cells) {
     rememberWon(mode, attempts, answer);
     return true;
   }
-  if (pathMode() === mode && pageWon()) {
+  if (pathMode() === mode && pageWon(mode)) {
     rememberWon(mode, attempts || 1, answer);
-    return true;
-  }
-  const remembered = wonRecord(mode);
-  if (remembered && (!remembered.answer || !answer || remembered.answer === answer)) {
     return true;
   }
   return false;
@@ -286,23 +308,141 @@ function mergeProgress(local, remote) {
 function localProgress() {
   const live = Object.fromEntries(
     modes.map(([mode]) => {
+      const remembered = wonRecord(mode);
+      if (!modeReady(mode) && !remembered) {
+        return [mode, {attempts: 0, done: false, cells: []}];
+      }
       const cells = mode === "classic" ? classicCells() : [];
       const answers = liveAnswers(mode);
       let attempts = answers.length || (mode === "classic" ? cells.length : 0);
       const done = modeDone(mode, attempts, cells);
-      if (done) attempts = attempts || wonRecord(mode)?.attempts || 1;
+      if (done) attempts = attempts || remembered?.attempts || 1;
       return [mode, {attempts, done, cells}];
     }),
   );
   return mergeProgress(live, cachedProgress());
 }
 
+function sameDayProgress(payload) {
+  return payload?.day === loldleDay() ? payload.progress || {} : {};
+}
+
 function progress() {
-  return mergeProgress(localProgress(), remoteProgress);
+  return mergeProgress(localProgress(), sameDayProgress({day: remoteDay, progress: remoteProgress}));
 }
 
 function finishedCount(player) {
   return modes.filter(([mode]) => player.progress?.[mode]?.done).length;
+}
+
+function isIos() {
+  const ua = navigator.userAgent || "";
+  return /iP(hone|od|ad)/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+function vibratePattern(pattern) {
+  try {
+    const vibrate = navigator.vibrate || navigator.webkitVibrate;
+    if (typeof vibrate !== "function") return false;
+    return Boolean(vibrate.call(navigator, pattern));
+  } catch {
+    return false;
+  }
+}
+
+function iosSwitchTick() {
+  try {
+    const label = document.createElement("label");
+    label.setAttribute("aria-hidden", "true");
+    Object.assign(label.style, {
+      position: "fixed",
+      left: "0",
+      top: "0",
+      width: "1px",
+      height: "1px",
+      overflow: "hidden",
+      pointerEvents: "none",
+      opacity: "0.01",
+    });
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.setAttribute("switch", "");
+    input.tabIndex = -1;
+    label.append(input);
+    document.body.append(label);
+    label.click();
+    input.click();
+    label.remove();
+  } catch {}
+}
+
+function buzzWin(allDone) {
+  if (document.hidden) return;
+  if (isIos()) {
+    iosSwitchTick();
+    setTimeout(iosSwitchTick, 70);
+    if (allDone) setTimeout(iosSwitchTick, 150);
+    return;
+  }
+  vibratePattern(allDone ? [55, 45, 80, 45, 80, 45, 160] : [40, 35, 90]);
+}
+
+function seedKnownDone(nextProgress = progress()) {
+  if (!knownDone) {
+    knownDone = new Set(modes.filter(([mode]) => nextProgress?.[mode]?.done).map(([mode]) => mode));
+  }
+  return knownDone;
+}
+
+function celebrateWins(nextProgress) {
+  if (document.body.classList.contains("ogurec-locked") || resetting) return;
+  const doneModes = modes.filter(([mode]) => nextProgress?.[mode]?.done).map(([mode]) => mode);
+  seedKnownDone(nextProgress);
+  const fresh = doneModes.filter((mode) => !knownDone.has(mode));
+  if (!fresh.length) return;
+  for (const mode of fresh) knownDone.add(mode);
+  if (document.hidden) return;
+  if (fresh.length === 1 && iosBuzzedMode === fresh[0]) return;
+  buzzWin(doneModes.length >= modes.length);
+}
+
+function scheduleWinBuzz() {
+  celebrateWins(progress());
+  cancelAnimationFrame(winBuzzTimer);
+  winBuzzTimer = requestAnimationFrame(() => celebrateWins(progress()));
+  setTimeout(() => celebrateWins(progress()), 140);
+  setTimeout(() => celebrateWins(progress()), 420);
+}
+
+function eventLooksLikeCorrectGuess(event) {
+  const mode = pathMode();
+  if (!mode) return false;
+  seedKnownDone();
+  if (knownDone.has(mode) || wonRecord(mode)) return false;
+  const answer = todayChampion(mode);
+  if (!answer) return false;
+  if (event.key === "Enter") {
+    const field = document.activeElement;
+    const typed = field && "value" in field ? field.value : "";
+    const highlighted = document.querySelector("[aria-selected='true'], li.active, .highlighted, .selected");
+    return enterGuessIsCorrect(typed, answer, highlighted?.innerText || "");
+  }
+  const node = event.target?.closest?.("li, button, [role='option'], a, div, span");
+  if (!node || node.closest(".ogurec-party, .ogurec-gate, .ogurec-reset, .classic-answers-container, .classic-answer")) {
+    return false;
+  }
+  return clickGuessIsCorrect(node.innerText || node.textContent, answer);
+}
+
+function maybeBuzzCorrectGuess(event) {
+  if (document.body.classList.contains("ogurec-locked") || resetting) return;
+  const mode = pathMode();
+  if (!mode || iosBuzzedMode === mode) return;
+  if (!isIos() && event.type !== "keydown") return;
+  if (!eventLooksLikeCorrectGuess(event)) return;
+  iosBuzzedMode = mode;
+  const nextDone = modes.filter(([item]) => item === mode || knownDone?.has(item) || progress()?.[item]?.done).length;
+  buzzWin(nextDone >= modes.length);
 }
 
 function ruCount(n, one, few, many) {
@@ -381,15 +521,29 @@ function render() {
   );
 }
 
-function setGate(text, failed = false) {
+function setGate(text, failed = false, value = null) {
   const status = gate.querySelector(".ogurec-gate-status");
+  const bar = gate.querySelector(".ogurec-progress");
+  const fill = gate.querySelector(".ogurec-progress-fill");
+  const pct = gate.querySelector(".ogurec-progress-pct");
+  const amount = failed ? 100 : Math.max(0, Math.min(100, value ?? 8));
   if (status) status.textContent = text;
+  if (fill) fill.style.width = `${amount}%`;
+  if (pct) pct.textContent = `${Math.round(amount)}%`;
+  if (bar) {
+    bar.setAttribute("aria-valuenow", String(Math.round(amount)));
+    bar.setAttribute("aria-valuetext", failed ? text : `${Math.round(amount)}% — ${text}`);
+  }
   gate.classList.toggle("is-failed", failed);
 }
 
 function unlockGame() {
-  document.body.classList.remove("ogurec-locked");
-  gate.remove();
+  setGate("Готово", false, 100);
+  window.setTimeout(() => {
+    document.body.classList.remove("ogurec-locked");
+    gate.remove();
+    seedKnownDone();
+  }, 180);
 }
 
 function waitForSocket(socket) {
@@ -407,21 +561,46 @@ function waitForSocket(socket) {
   });
 }
 
+function channelFromInstance(instanceId) {
+  const text = String(instanceId || "");
+  const guild = text.match(/-gc-\d+-(\d+)$/);
+  if (guild) return guild[1];
+  const priv = text.match(/-pc-(\d+)$/);
+  return priv ? priv[1] : "";
+}
+
+function readChannelId() {
+  const instance = discord?.instanceId || "";
+  const params = new URLSearchParams(location.search);
+  return String(
+    discord?.channelId ||
+    channelId ||
+    params.get("channel_id") ||
+    params.get("channelId") ||
+    channelFromInstance(instance) ||
+    "",
+  );
+}
+
 function snapshot() {
-  channelId = String(discord?.channelId || channelId || "");
+  const instance = String(discord?.instanceId || "");
+  channelId = readChannelId();
   return {
     id: user.id,
     name: user.global_name || user.username,
     avatar: user.avatar,
     channelId,
+    instanceId: instance,
+    day: loldleDay(),
     progress: progress(),
   };
 }
 
 function publish(force = false) {
-  if (!user) return;
+  if (!user || resetting) return;
   const state = snapshot();
   persistProgress(state.progress);
+  celebrateWins(state.progress);
   players.set(user.id, state);
   render();
   const payload = JSON.stringify(state);
@@ -444,6 +623,127 @@ function publish(force = false) {
     },
   }).catch(() => {});
 }
+
+function cookieDomains() {
+  const host = location.hostname;
+  const parts = host.split(".").filter(Boolean);
+  const domains = ["", host];
+  for (let i = 0; i <= Math.max(0, parts.length - 2); i += 1) {
+    const domain = parts.slice(i).join(".");
+    domains.push(domain, `.${domain}`);
+  }
+  return [...new Set(domains)];
+}
+
+function clearCookies() {
+  const expire = "expires=Thu, 01 Jan 1970 00:00:00 GMT";
+  const paths = ["/", "/ogurec", location.pathname || "/", ""];
+  for (const cookie of document.cookie.split(";")) {
+    const name = cookie.split("=")[0].trim();
+    if (!name) continue;
+    for (const domain of cookieDomains()) {
+      for (const path of paths) {
+        const domainPart = domain ? `domain=${domain};` : "";
+        const pathPart = path ? `path=${path};` : "";
+        document.cookie = `${name}=;${expire};${pathPart}${domainPart}`;
+      }
+    }
+  }
+}
+
+function deleteDatabase(name) {
+  if (!name) return Promise.resolve();
+  return new Promise((resolve) => {
+    try {
+      const request = indexedDB.deleteDatabase(name);
+      request.onsuccess = request.onerror = request.onblocked = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+async function clearIndexedDb() {
+  try {
+    if (indexedDB.databases) {
+      const dbs = await indexedDB.databases();
+      await Promise.all((dbs || []).map((db) => deleteDatabase(db?.name)));
+    }
+  } catch {}
+}
+
+async function clearCaches() {
+  try {
+    if (!window.caches?.keys) return;
+    const keys = await caches.keys();
+    await Promise.all(keys.map((key) => caches.delete(key)));
+  } catch {}
+}
+
+async function clearBrowserData() {
+  try { localStorage.clear(); } catch {}
+  try { sessionStorage.clear(); } catch {}
+  try { clearCookies(); } catch {}
+  await clearIndexedDb();
+  await clearCaches();
+}
+
+function waitForResetAck(userId, ms = 20000) {
+  if (!userId || !ws || ws.readyState !== WebSocket.OPEN) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const finish = (ok) => {
+      clearTimeout(timer);
+      ws.removeEventListener("message", onMessage);
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), ms);
+    function onMessage(event) {
+      try {
+        const state = JSON.parse(event.data);
+        if (state?.type === "reset" && String(state.id) === String(userId)) finish(true);
+      } catch {}
+    }
+    ws.addEventListener("message", onMessage);
+  });
+}
+
+async function resetMyStats() {
+  if (resetting) return;
+  if (!window.confirm("Сбросить вашу статистику LoLdle? Прогресс сотрётся из Discord, картинки в чате, cookies и localStorage.")) {
+    return;
+  }
+  resetting = true;
+  resetButton.disabled = true;
+  const ack = user ? waitForResetAck(user.id) : Promise.resolve(false);
+  if (user && ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      type: "reset",
+      id: user.id,
+      channelId: readChannelId(),
+      instanceId: String(discord?.instanceId || ""),
+      day: loldleDay(),
+    }));
+  }
+  await ack;
+  try {
+    await discord?.commands.setActivity({activity: {type: 0, details: "", state: ""}});
+  } catch {}
+  if (user) players.delete(user.id);
+  remoteProgress = {};
+  remoteDay = "";
+  lastSent = "";
+  lastClassicCells = [];
+  knownDone = new Set();
+  iosBuzzedMode = "";
+  await clearBrowserData();
+  location.reload();
+}
+
+resetButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  resetMyStats();
+});
 
 function playTestBeep() {
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -580,11 +880,23 @@ function removeUnrelated() {
 function onSocketMessage(event) {
   const state = JSON.parse(event.data);
   if (!state?.id) return;
+  if (state.type === "reset") {
+    players.delete(state.id);
+    if (user && state.id === user.id) {
+      remoteProgress = {};
+      remoteDay = "";
+    }
+    render();
+    return;
+  }
   if (user && state.id === user.id) {
-    remoteProgress = state.progress || {};
-    persistProgress(progress());
+    if (state.day === loldleDay()) {
+      remoteDay = state.day;
+      remoteProgress = state.progress || {};
+      persistProgress(progress());
+    }
     players.set(user.id, snapshot());
-  } else {
+  } else if (!state.day || state.day === loldleDay()) {
     players.set(state.id, state);
   }
   render();
@@ -614,17 +926,18 @@ function openSocket() {
 
 async function connectDiscord() {
   if (!clientId) throw new Error("DISCORD_CLIENT_ID is not configured");
-  setGate("Подключение к Discord…");
+  setGate("Подключение к Discord…", false, 12);
   discord = new DiscordSDK(clientId);
   await discord.ready();
-  channelId = discord.channelId || channelId || "";
-  setGate("Входим…");
+  channelId = readChannelId();
+  setGate("Входим…", false, 38);
   const {code} = await discord.commands.authorize({
     client_id: clientId,
     response_type: "code",
     prompt: "none",
     scope: ["identify"],
   });
+  setGate("Получаем доступ…", false, 58);
   const tokenResponse = await fetch("/ogurec/token", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
@@ -634,10 +947,10 @@ async function connectDiscord() {
   if (!token.access_token) {
     throw new Error(token.error_description || token.error || `OAuth token: HTTP ${tokenResponse.status}`);
   }
-  setGate("Открываем сессию…");
+  setGate("Открываем сессию…", false, 76);
   ({user} = await discord.commands.authenticate({access_token: token.access_token}));
-  channelId = discord.channelId || channelId || "";
-  setGate("Собираем игроков…");
+  channelId = readChannelId();
+  setGate("Собираем игроков…", false, 90);
   await waitForSocket(openSocket());
 }
 
@@ -671,7 +984,18 @@ document.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
 }, true);
+document.addEventListener("pointerdown", maybeBuzzCorrectGuess, true);
+document.addEventListener("click", (event) => {
+  if (document.body.classList.contains("ogurec-locked")) return;
+  if (event.target.closest(".ogurec-party, .ogurec-gate, .ogurec-reset")) return;
+  maybeBuzzCorrectGuess(event);
+  scheduleWinBuzz();
+}, true);
 document.addEventListener("keydown", (event) => {
   if (document.body.classList.contains("ogurec-locked")) event.preventDefault();
+  else if (event.key === "Enter") {
+    maybeBuzzCorrectGuess(event);
+    scheduleWinBuzz();
+  }
 }, true);
 start();

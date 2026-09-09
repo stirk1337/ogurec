@@ -44,7 +44,7 @@ IFRAME_CHECK = (
     "&&(this.isInIframe=!0)}catch(e){this.isInIframe=!0}}"
 )
 INDEX_BUNDLE = "js/index.9df01de2d504cd5f2472.1783962704014.js"
-ASSET_VERSION = "28"
+ASSET_VERSION = "36"
 WORLDS_OFF = (
     (
         "worldsMayhemAvailable(){return this.$store.state.game.worldsMayhemAvailable}",
@@ -125,6 +125,7 @@ class ActivityServer:
         self.rooms = defaultdict(set)
         self.states = defaultdict(dict)
         self.on_progress = None
+        self.on_reset = None
         self.on_idle = None
         self.session = aiohttp.ClientSession(auto_decompress=True)
         self.runner = None
@@ -189,6 +190,7 @@ class ActivityServer:
             self.rooms[room].discard(ws)
             if not self.rooms[room]:
                 self.rooms.pop(room, None)
+                self.states.pop(room, None)
                 if self.on_idle:
                     try:
                         await self.on_idle(room)
@@ -202,6 +204,20 @@ class ActivityServer:
             parsed = json.loads(payload)
         except ValueError:
             parsed = None
+        if isinstance(parsed, dict) and parsed.get("type") == "reset":
+            user_id = str(parsed.get("id") or "")
+            if self.on_reset and user_id:
+                try:
+                    await self.on_reset(room, parsed)
+                except Exception:
+                    logger.exception("Failed to reset LoLdle player")
+            if user_id:
+                self.states.get(room, {}).pop(user_id, None)
+            payload = json.dumps({"type": "reset", "id": user_id})
+            for peer in tuple(self.rooms[room]):
+                if not peer.closed:
+                    await peer.send_str(payload)
+            return
         if isinstance(parsed, dict) and parsed.get("id"):
             if self.on_progress:
                 try:

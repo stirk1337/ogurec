@@ -242,7 +242,20 @@ async def fetch_avatars(session, players: list[dict]) -> dict[str, Image.Image]:
     return faces
 
 
-def _header(image: Image.Image, draw: ImageDraw.ImageDraw, width: int, outer: int) -> int:
+def _header_space(*, remaining: bool) -> int:
+    logo = _logo(96)
+    return (logo.height + 2 if logo is not None else 28) + 14 + 20 + (22 if remaining else 0)
+
+
+def _header(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    width: int,
+    outer: int,
+    title: str,
+    *,
+    remaining: bool,
+) -> int:
     logo = _logo(96)
     y = outer
     if logo is not None:
@@ -254,9 +267,13 @@ def _header(image: Image.Image, draw: ImageDraw.ImageDraw, width: int, outer: in
         y += 28
     draw.line((48, y + 2, width - 48, y + 2), fill=GOLD_DEEP, width=1)
     y += 14
-    remain = _font("regular", 14)
-    draw.text((width / 2, y), f"осталось {format_until_next()}", font=remain, fill=GOLD, anchor="mt")
-    return y + 22
+    subtitle = _font("regular", 14)
+    draw.text((width / 2, y), title or "LoLdle", font=subtitle, fill=GOLD, anchor="mt")
+    y += 20
+    if remaining:
+        draw.text((width / 2, y), f"осталось {format_until_next()}", font=subtitle, fill=GOLD, anchor="mt")
+        y += 22
+    return y
 
 
 def render_scoreboard(
@@ -264,13 +281,14 @@ def render_scoreboard(
     avatars: dict[str, Image.Image] | None = None,
     title: str = "LoLdle",
     streak: int = 0,
+    remaining: bool = True,
 ) -> BytesIO:
     del streak
     avatars = avatars or {}
     people = list(players)
     stacked = len(people) != 1
     logo = _logo(96)
-    title_h = 42 + (logo.height if logo is not None else 28)
+    title_h = _header_space(remaining=remaining)
     gap = 14
     outer = 20
     if not people:
@@ -278,7 +296,7 @@ def render_scoreboard(
         height = outer + title_h + outer
         image = Image.new("RGB", (width, height), BG)
         draw = ImageDraw.Draw(image)
-        _header(image, draw, width, outer)
+        _header(image, draw, width, outer, title, remaining=remaining)
         buffer = BytesIO()
         image.save(buffer, format="PNG")
         buffer.seek(0)
@@ -300,7 +318,7 @@ def render_scoreboard(
     height = outer + title_h + rows_n * row_h + (rows_n - 1) * gap + outer
     image = Image.new("RGB", (width, height), BG)
     draw = ImageDraw.Draw(image)
-    y = _header(image, draw, width, outer)
+    y = _header(image, draw, width, outer, title, remaining=remaining)
 
     extra = (width - (outer * 2 + cols * col_w + (cols - 1) * gap)) // 2
     for index, (player, cells) in enumerate(zip(people, boards)):
