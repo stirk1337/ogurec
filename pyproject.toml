@@ -18,6 +18,10 @@ ogurec = "ogurec.cmd.main:main"
 [tool.uv]
 package = true
 
+[tool.setuptools.packages.find]
+include = ["ogurec*"]
+exclude = ["ogurec.activity.client.node_modules*"]
+
 [tool.ruff]
 line-length = 120
 lint.select = [
