@@ -230,6 +230,24 @@ class HelperTests(unittest.TestCase):
         self.assertIsNone(play_id_day("loldle:play"))
         self.assertIsNone(play_id_day("other"))
 
+    def test_iter_custom_ids_walks_nested_rows(self):
+        from types import SimpleNamespace
+
+        from ogurec.activity.loldle_store import first_text_display, iter_custom_ids
+
+        nested = SimpleNamespace(
+            custom_id=None,
+            children=[
+                SimpleNamespace(custom_id=None, children=[], content="stirk играет", type=SimpleNamespace(name="text_display")),
+                SimpleNamespace(
+                    custom_id=None,
+                    children=[SimpleNamespace(custom_id="loldle:play:2026-09-09", children=[])],
+                ),
+            ],
+        )
+        self.assertEqual(iter_custom_ids([nested]), ["loldle:play:2026-09-09"])
+        self.assertEqual(first_text_display([nested]), "stirk играет")
+
     def test_player_wins(self):
         self.assertEqual(player_wins(player("1", day="2026-09-08", done=True)), 1)
         self.assertEqual(player_wins(player("1", day="2026-09-08", done=False)), 0)
@@ -238,11 +256,27 @@ class HelperTests(unittest.TestCase):
         instance = "i-1276580072400224306-gc-912952092627435520-912954213460484116"
         self.assertEqual(parse_instance_channel(instance), 912954213460484116)
         self.assertEqual(parse_instance_channel("i-1-pc-42"), 42)
+        self.assertEqual(parse_instance_channel("gc-912952092627435520-912954213460484116"), 912954213460484116)
+        self.assertEqual(parse_instance_channel("pc-42"), 42)
         self.assertIsNone(parse_instance_channel("room-abc"))
 
     def test_native_invite_resolves_channel_from_instance(self):
         instance = "i-1276580072400224306-gc-912952092627435520-912954213460484116"
         channel = resolve_channel_id({"id": "1", "channelId": ""}, instance, {}, {}, None)
+        self.assertEqual(channel, 912954213460484116)
+
+    def test_finished_invite_resolves_channel_from_location(self):
+        channel = resolve_channel_id(
+            {
+                "id": "1",
+                "channelId": "",
+                "locationId": "gc-912952092627435520-912954213460484116",
+            },
+            "new-instance-without-channel",
+            {},
+            {},
+            None,
+        )
         self.assertEqual(channel, 912954213460484116)
 
 
@@ -261,6 +295,8 @@ class ScoreboardTests(unittest.TestCase):
         )
         self.assertGreater(Image.open(with_timer).height, Image.open(recap).height)
         self.assertGreater(Image.open(filled).height, Image.open(recap).height)
+        self.assertGreaterEqual(Image.open(filled).width, 800)
+        self.assertGreaterEqual(Image.open(with_timer).width, 800)
 
 
 if __name__ == "__main__":

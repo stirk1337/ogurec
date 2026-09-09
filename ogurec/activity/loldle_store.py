@@ -57,6 +57,28 @@ def play_custom_id(day: str) -> str:
     return f"{PLAY_ID}:{day}"
 
 
+def iter_custom_ids(components) -> list[str]:
+    found: list[str] = []
+    for item in components or []:
+        custom_id = getattr(item, "custom_id", None)
+        if custom_id:
+            found.append(str(custom_id))
+        found.extend(iter_custom_ids(getattr(item, "children", None)))
+    return found
+
+
+def first_text_display(components) -> str:
+    for item in components or []:
+        content = getattr(item, "content", None)
+        kind = getattr(getattr(item, "type", None), "name", "") or ""
+        if content and kind == "text_display":
+            return str(content)
+        nested = first_text_display(getattr(item, "children", None))
+        if nested:
+            return nested
+    return ""
+
+
 def play_id_day(custom_id: str | None) -> str | None:
     if not custom_id:
         return None
@@ -128,7 +150,7 @@ def apply_player_update(old: dict | None, new: dict | None, today: str) -> dict 
 
 
 def coerce_channel_id(raw) -> int | None:
-    if raw in (None, "", 0, "0"):
+    if raw in (None, "", 0, "0", "null", "undefined"):
         return None
     try:
         value = int(raw)
@@ -141,7 +163,7 @@ def parse_instance_channel(instance_id: str | None) -> int | None:
     if not instance_id:
         return None
     text = str(instance_id)
-    match = re.search(r"-gc-\d+-(\d+)$", text) or re.search(r"-pc-(\d+)$", text)
+    match = re.search(r"(?:^|-)gc-\d+-(\d+)$", text) or re.search(r"(?:^|-)pc-(\d+)$", text)
     return int(match.group(1)) if match else None
 
 
@@ -155,6 +177,7 @@ def resolve_channel_id(
     user_id = str(player.get("id") or "")
     for candidate in (
         coerce_channel_id(player.get("channelId")),
+        parse_instance_channel(player.get("locationId")),
         instances.get(instance_id),
         parse_instance_channel(instance_id),
         parse_instance_channel(player.get("instanceId")),

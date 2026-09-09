@@ -2,7 +2,7 @@ import {DiscordSDK} from "@discord/embedded-app-sdk";
 import CryptoJS from "crypto-js";
 import {clickGuessIsCorrect, enterGuessIsCorrect} from "./guess.js";
 import {mergeProgress, modalWinAttempts, modeSnapshot} from "./progress.js";
-import {createResetSession, isResetAck, resetPayload} from "./reset.js";
+import {createResetSession, isResetAck, resetPayload, storageKeysToClear} from "./reset.js";
 
 const modes = [
   ["classic", "Классика"],
@@ -25,7 +25,7 @@ panel.innerHTML = `
     <div class="ogurec-players">Ждём игроков…</div>
     <button type="button" class="ogurec-reset">Сбросить вашу статистику</button>
     <div class="ogurec-reset-confirm" hidden>
-      <p>Прогресс сотрётся из Discord, с картинки в чате, cookies и localStorage.</p>
+      <p>Прогресс сотрётся из Discord и с картинки в чате.</p>
       <div class="ogurec-reset-actions">
         <button type="button" class="ogurec-reset-no">Отмена</button>
         <button type="button" class="ogurec-reset-yes">Сбросить</button>
@@ -555,27 +555,29 @@ function waitForSocket(socket) {
 
 function channelFromInstance(instanceId) {
   const text = String(instanceId || "");
-  const guild = text.match(/-gc-\d+-(\d+)$/);
+  const guild = text.match(/(?:^|-)gc-\d+-(\d+)$/);
   if (guild) return guild[1];
-  const priv = text.match(/-pc-(\d+)$/);
+  const priv = text.match(/(?:^|-)pc-(\d+)$/);
   return priv ? priv[1] : "";
 }
 
 function readChannelId() {
-  const instance = discord?.instanceId || "";
   const params = new URLSearchParams(location.search);
   return String(
     discord?.channelId ||
     channelId ||
     params.get("channel_id") ||
     params.get("channelId") ||
-    channelFromInstance(instance) ||
+    channelFromInstance(discord?.instanceId) ||
+    channelFromInstance(discord?.locationId) ||
+    channelFromInstance(params.get("location_id")) ||
     "",
   );
 }
 
 function snapshot() {
   const instance = String(discord?.instanceId || "");
+  const locationId = String(discord?.locationId || new URLSearchParams(location.search).get("location_id") || "");
   channelId = readChannelId();
   return {
     id: user.id,
@@ -583,6 +585,7 @@ function snapshot() {
     avatar: user.avatar,
     channelId,
     instanceId: instance,
+    locationId,
     day: loldleDay(),
     progress: progress(),
   };
@@ -617,68 +620,20 @@ function publish(force = false) {
   }).catch(() => {});
 }
 
-function cookieDomains() {
-  const host = location.hostname;
-  const parts = host.split(".").filter(Boolean);
-  const domains = ["", host];
-  for (let i = 0; i <= Math.max(0, parts.length - 2); i += 1) {
-    const domain = parts.slice(i).join(".");
-    domains.push(domain, `.${domain}`);
+function clearGameStorage(storage) {
+  const keys = [];
+  for (let i = 0; i < storage.length; i += 1) {
+    const key = storage.key(i);
+    if (key) keys.push(key);
   }
-  return [...new Set(domains)];
-}
-
-function clearCookies() {
-  const expire = "expires=Thu, 01 Jan 1970 00:00:00 GMT";
-  const paths = ["/", "/ogurec", location.pathname || "/", ""];
-  for (const cookie of document.cookie.split(";")) {
-    const name = cookie.split("=")[0].trim();
-    if (!name) continue;
-    for (const domain of cookieDomains()) {
-      for (const path of paths) {
-        const domainPart = domain ? `domain=${domain};` : "";
-        const pathPart = path ? `path=${path};` : "";
-        document.cookie = `${name}=;${expire};${pathPart}${domainPart}`;
-      }
-    }
+  for (const key of storageKeysToClear(keys)) {
+    storage.removeItem(key);
   }
 }
 
-function deleteDatabase(name) {
-  if (!name) return Promise.resolve();
-  return new Promise((resolve) => {
-    try {
-      const request = indexedDB.deleteDatabase(name);
-      request.onsuccess = request.onerror = request.onblocked = () => resolve();
-    } catch {
-      resolve();
-    }
-  });
-}
-
-async function clearIndexedDb() {
-  try {
-    if (indexedDB.databases) {
-      const dbs = await indexedDB.databases();
-      await Promise.all((dbs || []).map((db) => deleteDatabase(db?.name)));
-    }
-  } catch {}
-}
-
-async function clearCaches() {
-  try {
-    if (!window.caches?.keys) return;
-    const keys = await caches.keys();
-    await Promise.all(keys.map((key) => caches.delete(key)));
-  } catch {}
-}
-
-async function clearBrowserData() {
-  try { localStorage.clear(); } catch {}
-  try { sessionStorage.clear(); } catch {}
-  try { clearCookies(); } catch {}
-  await clearIndexedDb();
-  await clearCaches();
+function clearBrowserData() {
+  try { clearGameStorage(localStorage); } catch {}
+  try { clearGameStorage(sessionStorage); } catch {}
 }
 
 function waitForResetAck(userId, ms = 20000) {
@@ -739,7 +694,9 @@ async function resetMyStats() {
   lastClassicCells = [];
   knownDone = new Set();
   iosBuzzedMode = "";
-  await clearBrowserData();
+  lastPlayedMode = "";
+  readyModes.clear();
+  clearBrowserData();
   location.reload();
 }
 

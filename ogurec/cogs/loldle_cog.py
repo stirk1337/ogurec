@@ -12,7 +12,9 @@ from ogurec.activity.loldle_store import (
     PLAY_ID,
     LoldleStore,
     coerce_channel_id,
+    first_text_display,
     format_day,
+    iter_custom_ids,
     loldle_day,
     parse_instance_channel,
     play_custom_id,
@@ -27,6 +29,7 @@ from ogurec.activity.server import ActivityServer
 from ogurec.bot import OgurecBot
 
 SESSION_GRACE = 120
+BOARD_ACCENT = 0xE4C15A
 
 
 async def handle_play(interaction: discord.Interaction) -> None:
@@ -67,11 +70,26 @@ class PlayButton(discord.ui.DynamicItem[discord.ui.Button], template=r"loldle:pl
         await handle_play(interaction)
 
 
-class LoldleView(discord.ui.View):
-    def __init__(self, day: str | None = None):
+class LoldleView(discord.ui.LayoutView):
+    def __init__(
+        self,
+        day: str | None = None,
+        *,
+        content: str = "",
+        filename: str = "loldle.png",
+        play: bool = True,
+    ):
         super().__init__(timeout=None)
         self.day = day or loldle_day()
-        self.add_item(PlayButton(self.day))
+        parts: list[discord.ui.Item] = []
+        if content:
+            parts.append(discord.ui.TextDisplay(content))
+        parts.append(discord.ui.MediaGallery(discord.MediaGalleryItem(f"attachment://{filename}")))
+        if play:
+            row = discord.ui.ActionRow()
+            row.add_item(PlayButton(self.day))
+            parts.append(row)
+        self.add_item(discord.ui.Container(*parts, accent_colour=BOARD_ACCENT))
 
 
 class LegacyLoldleView(discord.ui.View):
@@ -150,7 +168,7 @@ class Loldle(commands.Cog):
         try:
             players, starters = self._people_for_board(channel_id)
             streak = int(self.store.channel(channel_id).get("streak") or 0)
-            content, embed, file = await self._card(
+            content, file = await self._card(
                 players,
                 starters,
                 streak=streak,
@@ -163,22 +181,16 @@ class Loldle(commands.Cog):
             mentions = discord.AllowedMentions.none()
             existing = await self._today_board(channel)
             if existing is not None:
-                await existing.edit(
-                    content=content,
-                    embed=embed,
-                    attachments=[file],
-                    view=LoldleView(today),
-                    allowed_mentions=mentions,
-                )
+                await self._edit_board(existing, content=content, file=file, day=today, play=True, mentions=mentions)
                 self.boards[channel_id] = existing
                 self.store.set_board_id(channel_id, existing.id)
                 await interaction.delete_original_response()
                 return
             message = await interaction.edit_original_response(
-                content=content,
-                embed=embed,
+                content=None,
+                embed=None,
                 attachments=[file],
-                view=LoldleView(today),
+                view=LoldleView(today, content=content, play=True),
                 allowed_mentions=mentions,
             )
             self.boards[channel_id] = message
@@ -209,14 +221,16 @@ class Loldle(commands.Cog):
         self.store.remember_user_channel(user_id, channel_id)
         stored = self.store.upsert_player(channel_id, player)
         if stored is None:
-            existing = self.store.player(channel_id, user_id)
-            if existing:
-                return existing
-            return {**player, "day": today, "progress": {}}
+            stored = self.store.player(channel_id, user_id)
+        try:
+            self.store.add_starter(channel_id, int(user_id))
+        except ValueError:
+            pass
         if not self._session_live(channel_id):
             self._begin_session(channel_id)
         self._touch(channel_id)
-        self.session_players.setdefault(channel_id, {})[user_id] = stored
+        if stored is not None:
+            self.session_players.setdefault(channel_id, {})[user_id] = stored
         try:
             self.session_starters.setdefault(channel_id, set()).add(int(user_id))
         except ValueError:
@@ -224,7 +238,7 @@ class Loldle(commands.Cog):
         channel = await self._messageable(channel_id)
         if channel is not None:
             self._schedule_publish(channel)
-        return stored
+        return stored or {**player, "day": today, "progress": {}}
 
     async def on_reset(self, instance_id: str, payload: dict) -> None:
         user_id = str(payload.get("id") or "")
@@ -265,16 +279,28 @@ class Loldle(commands.Cog):
         if not app_id or not instance_id or not token:
             return None
         url = f"https://discord.com/api/v10/applications/{app_id}/activity-instances/{instance_id}"
+        data = None
         try:
-            async with self.activity_server.session.get(url, headers={"Authorization": f"Bot {token}"}) as response:
-                if response.status != 200:
+            for attempt in range(2):
+                async with self.activity_server.session.get(url, headers={"Authorization": f"Bot {token}"}) as response:
+                    if response.status == 200:
+                        data = await response.json(content_type=None)
+                        break
+                    if response.status == 404 and attempt == 0:
+                        await asyncio.sleep(0.4)
+                        continue
+                    logger.warning(
+                        "LoLdle activity instance lookup HTTP {} instance={}",
+                        response.status,
+                        instance_id,
+                    )
                     return None
-                data = await response.json(content_type=None)
         except Exception:
             logger.exception("Failed to resolve LoLdle activity instance")
             return None
         location = data.get("location") if isinstance(data, dict) else None
-        return coerce_channel_id((location or {}).get("channel_id"))
+        location = location or {}
+        return coerce_channel_id(location.get("channel_id")) or parse_instance_channel(location.get("id"))
 
     def _schedule_publish(self, channel: discord.abc.Messageable) -> None:
         channel_id = channel.id
@@ -313,7 +339,7 @@ class Loldle(commands.Cog):
         async with self._lock(channel_id):
             await self._freeze_board(channel, self.store.freeze_day(channel_id, job["day"]))
             if job.get("played"):
-                recap, recap_embed, recap_file = await self._card(
+                recap, recap_file = await self._card(
                     list(job.get("players") or []),
                     set(job.get("starters") or set()),
                     streak=int(job.get("streak") or 0),
@@ -323,11 +349,16 @@ class Loldle(commands.Cog):
                     ping=False,
                     remaining=False,
                 )
-                recap_message = await channel.send(
-                    content=recap,
-                    embed=recap_embed,
-                    file=recap_file,
-                    allowed_mentions=discord.AllowedMentions.none(),
+                recap_message = await asyncio.wait_for(
+                    self._send_board(
+                        channel,
+                        content=recap,
+                        file=recap_file,
+                        day=None,
+                        play=False,
+                        mentions=discord.AllowedMentions.none(),
+                    ),
+                    timeout=12,
                 )
                 self.store.set_recap_id(channel_id, job["day"], recap_message.id)
             self.store.mark_recapped(channel_id, job["day"])
@@ -357,7 +388,7 @@ class Loldle(commands.Cog):
             message = await self._today_board(channel)
             if message is not None and self._last.get(channel_id) == fingerprint:
                 return
-            content, embed, file = await self._card(
+            content, file = await self._card(
                 players,
                 starters,
                 streak=streak,
@@ -366,26 +397,27 @@ class Loldle(commands.Cog):
             )
             try:
                 mentions = discord.AllowedMentions.none()
-                view = LoldleView(today)
                 if message is None:
                     message = await asyncio.wait_for(
-                        channel.send(
+                        self._send_board(
+                            channel,
                             content=content,
-                            embed=embed,
                             file=file,
-                            view=view,
-                            allowed_mentions=mentions,
+                            day=today,
+                            play=True,
+                            mentions=mentions,
                         ),
                         timeout=12,
                     )
                 else:
                     await asyncio.wait_for(
-                        message.edit(
+                        self._edit_board(
+                            message,
                             content=content,
-                            embed=embed,
-                            attachments=[file],
-                            view=view,
-                            allowed_mentions=mentions,
+                            file=file,
+                            day=today,
+                            play=True,
+                            mentions=mentions,
                         ),
                         timeout=12,
                     )
@@ -417,7 +449,7 @@ class Loldle(commands.Cog):
         title = f"Итоги · {format_day(day)}" if day else "Итоги LoLdle"
         async with self._lock(channel.id):
             for mid in targets:
-                content, embed, file = await self._card(
+                content, file = await self._card(
                     list(job.get("players") or []),
                     set(job.get("starters") or set()),
                     streak=streak,
@@ -430,12 +462,13 @@ class Loldle(commands.Cog):
                 try:
                     message = await fetch(mid)
                     await asyncio.wait_for(
-                        message.edit(
+                        self._edit_board(
+                            message,
                             content=content,
-                            embed=embed,
-                            attachments=[file],
-                            view=None,
-                            allowed_mentions=discord.AllowedMentions.none(),
+                            file=file,
+                            day=None,
+                            play=False,
+                            mentions=discord.AllowedMentions.none(),
                         ),
                         timeout=12,
                     )
@@ -560,13 +593,11 @@ class Loldle(commands.Cog):
         if self.bot.user is None or message.author.id != self.bot.user.id:
             return False
         want = play_custom_id(today)
-        for row in message.components:
-            for child in getattr(row, "children", []):
-                custom_id = getattr(child, "custom_id", None)
-                if custom_id == want:
-                    return True
-                if play_id_day(custom_id) not in (None, today) and custom_id != PLAY_ID:
-                    return False
+        for custom_id in iter_custom_ids(message.components):
+            if custom_id == want:
+                return True
+            if play_id_day(custom_id) not in (None, today) and custom_id != PLAY_ID:
+                return False
         return False
 
     async def _freeze_board(self, channel: discord.abc.Messageable, board_id: int | None) -> None:
@@ -577,7 +608,13 @@ class Loldle(commands.Cog):
             return
         try:
             message = await fetch(int(board_id))
-            await message.edit(view=None)
+            caption = message.content or first_text_display(message.components)
+            filename = message.attachments[0].filename if message.attachments else "loldle.png"
+            await message.edit(
+                content=None,
+                embed=None,
+                view=LoldleView(play=False, content=caption, filename=filename),
+            )
         except (discord.HTTPException, TypeError, ValueError):
             logger.exception("Failed to freeze yesterday LoLdle board")
 
@@ -593,13 +630,11 @@ class Loldle(commands.Cog):
         ping: bool | None = None,
         status: bool = False,
         remaining: bool = True,
-    ) -> tuple[str, discord.Embed, discord.File]:
+    ) -> tuple[str, discord.File]:
         ranked = sorted(players, key=lambda item: (-player_wins(item), item.get("name") or ""))
         avatars = await fetch_avatars(self.activity_server.session, ranked)
         image = render_scoreboard(ranked, avatars, title=title, streak=streak, remaining=remaining)
         file = discord.File(image, filename="loldle.png")
-        embed = discord.Embed(color=0xC8AA6E)
-        embed.set_image(url="attachment://loldle.png")
         return self._caption(
             ranked,
             starters,
@@ -608,7 +643,41 @@ class Loldle(commands.Cog):
             recap=recap,
             ping=ping,
             status=status,
-        ), embed, file
+        ), file
+
+    async def _send_board(
+        self,
+        channel: discord.abc.Messageable,
+        *,
+        content: str,
+        file: discord.File,
+        day: str | None,
+        play: bool,
+        mentions: discord.AllowedMentions,
+    ) -> discord.Message:
+        return await channel.send(
+            file=file,
+            view=LoldleView(day, content=content, play=play),
+            allowed_mentions=mentions,
+        )
+
+    async def _edit_board(
+        self,
+        message: discord.Message,
+        *,
+        content: str,
+        file: discord.File,
+        day: str | None,
+        play: bool,
+        mentions: discord.AllowedMentions,
+    ) -> discord.Message:
+        return await message.edit(
+            content=None,
+            embed=None,
+            attachments=[file],
+            view=LoldleView(day, content=content, play=play),
+            allowed_mentions=mentions,
+        )
 
     def _caption(
         self,

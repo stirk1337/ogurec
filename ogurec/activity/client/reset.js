@@ -42,3 +42,16 @@ export function createResetSession() {
     },
   };
 }
+
+export function shouldClearStorageKey(key) {
+  const name = String(key || "");
+  if (!name) return false;
+  if (/^(ogurecWon|ogurecProgress)$/.test(name)) return true;
+  if (/_(answers|today_answer)$/.test(name)) return true;
+  return false;
+}
+
+export function storageKeysToClear(keys) {
+  return [...keys].filter((key) => shouldClearStorageKey(key));
+}
+

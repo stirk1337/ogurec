@@ -68,6 +68,11 @@ test("leftover answers on the hub are not today's win", () => {
   assert.equal(leftover.attempts, 0);
 });
 
+test("finished Discord invite still sends channel via locationId", () => {
+  assert.match(src, /discord\?\.locationId/);
+  assert.match(src, /locationId/);
+});
+
 test("yellow then done keeps done and the higher attempt count", () => {
   const merged = mergeMode(
     {attempts: 4, done: false, cells: []},

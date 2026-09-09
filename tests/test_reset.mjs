@@ -4,7 +4,7 @@ import {dirname, join} from "node:path";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
 
-import {createResetSession, isResetAck, resetPayload} from "../ogurec/activity/client/reset.js";
+import {createResetSession, isResetAck, resetPayload, storageKeysToClear} from "../ogurec/activity/client/reset.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = readFileSync(join(root, "ogurec/activity/client/src.js"), "utf8");
@@ -38,4 +38,23 @@ test("reset websocket payload and ack match the server", () => {
   assert.equal(isResetAck(JSON.stringify({type: "reset", id: "1"}), "1"), true);
   assert.equal(isResetAck(JSON.stringify({type: "reset", id: "2"}), "1"), false);
   assert.equal(isResetAck("not-json", "1"), false);
+});
+
+test("reset must not wipe Discord SDK / LoLdle boot storage", () => {
+  assert.doesNotMatch(src, /localStorage\.clear\s*\(/, "full localStorage.clear breaks LoLdle JSON and locale after reload");
+  assert.doesNotMatch(src, /sessionStorage\.clear\s*\(/);
+  assert.doesNotMatch(src, /indexedDB\.deleteDatabase/, "deleting all IndexedDB DBs breaks the Discord Activity SDK");
+  assert.doesNotMatch(src, /caches\.delete/, "wiping Cache Storage makes chunk loads fail after reload");
+  assert.match(src, /shouldClearStorageKey|storageKeysToClear/);
+  const kept = storageKeysToClear([
+    "currentLocale",
+    "ogurecLocale",
+    "fit_to_screen",
+    "classic_answers",
+    "quote_today_answer",
+    "ogurecWon",
+    "ogurecProgress",
+    "discord_sdk",
+  ]);
+  assert.deepEqual(kept.sort(), ["classic_answers", "ogurecProgress", "ogurecWon", "quote_today_answer"]);
 });

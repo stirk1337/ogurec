@@ -20,6 +20,10 @@ INK = (240, 230, 210)
 MUTED = (160, 155, 140)
 GOLD = (200, 170, 110)
 GOLD_DEEP = (154, 126, 77)
+LOGO_WIDTH = 220
+BOARD_MIN_WIDTH = 900
+BOARD_OUTER = 32
+BOARD_GAP = 18
 LINE = (58, 48, 32)
 GOOD = (9, 192, 45)
 PARTIAL = (219, 128, 11)
@@ -152,11 +156,11 @@ def _draw_labels(draw: ImageDraw.ImageDraw, left: int, top: int, cell: int, gap:
 
 
 def _card_metrics(*, stacked: bool) -> dict[str, int]:
-    avatar = 64 if stacked else 92
-    cell = 28 if stacked else 36
-    gap = 6 if stacked else 8
-    pad = 16 if stacked else 20
-    label_h = 18 if stacked else 22
+    avatar = 88 if stacked else 132
+    cell = 40 if stacked else 54
+    gap = 8 if stacked else 12
+    pad = 22 if stacked else 28
+    label_h = 24 if stacked else 28
     grid_w, grid_h = _grid_size(cell, gap)
     inner_w = max(avatar, grid_w) if stacked else avatar + 24 + grid_w
     inner_h = avatar + 10 + label_h + grid_h if stacked else max(avatar, label_h + 6 + grid_h)
@@ -194,14 +198,14 @@ def _draw_card(
     stacked: bool,
 ) -> None:
     left, top, right, bottom = box
-    draw.rounded_rectangle(box, radius=18, fill=CARD, outline=GOLD_DEEP, width=2)
+    draw.rounded_rectangle(box, radius=24, fill=CARD, outline=GOLD_DEEP, width=2)
     pad = metrics["pad"]
     avatar = metrics["avatar"]
     cell = metrics["cell"]
     gap = metrics["gap"]
     face = _face(player, avatars, avatar)
-    label_font = _font("semibold", 12 if stacked else 14)
-    mark_font = _font("semibold", 16 if stacked else 20)
+    label_font = _font("semibold", 16 if stacked else 18)
+    mark_font = _font("semibold", 22 if stacked else 28)
     if stacked:
         ax = left + (right - left - avatar) // 2
         ay = top + pad
@@ -229,7 +233,7 @@ async def fetch_avatars(session, players: list[dict]) -> dict[str, Image.Image]:
             continue
         avatar = player.get("avatar")
         url = (
-            f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}.png?size=128"
+            f"https://cdn.discordapp.com/avatars/{user_id}/{avatar}.png?size=256"
             if avatar
             else f"https://cdn.discordapp.com/embed/avatars/{int(user_id) % 6}.png"
         )
@@ -243,8 +247,8 @@ async def fetch_avatars(session, players: list[dict]) -> dict[str, Image.Image]:
 
 
 def _header_space(*, remaining: bool) -> int:
-    logo = _logo(96)
-    return (logo.height + 2 if logo is not None else 28) + 14 + 20 + (22 if remaining else 0)
+    logo = _logo(LOGO_WIDTH)
+    return (logo.height + 8 if logo is not None else 40) + 18 + 28 + (28 if remaining else 0)
 
 
 def _header(
@@ -256,23 +260,24 @@ def _header(
     *,
     remaining: bool,
 ) -> int:
-    logo = _logo(96)
+    logo = _logo(LOGO_WIDTH)
     y = outer
     if logo is not None:
         image.paste(logo, ((width - logo.width) // 2, y), logo)
-        y += logo.height + 2
+        y += logo.height + 8
     else:
-        word = _font("semibold", 22)
+        word = _font("semibold", 36)
         draw.text((width / 2, y), "LoLdle", font=word, fill=GOLD, anchor="mt")
-        y += 28
-    draw.line((48, y + 2, width - 48, y + 2), fill=GOLD_DEEP, width=1)
-    y += 14
-    subtitle = _font("regular", 14)
+        y += 40
+    inset = max(BOARD_OUTER + 16, width // 8)
+    draw.line((inset, y + 2, width - inset, y + 2), fill=GOLD_DEEP, width=2)
+    y += 18
+    subtitle = _font("regular", 22)
     draw.text((width / 2, y), title or "LoLdle", font=subtitle, fill=GOLD, anchor="mt")
-    y += 20
+    y += 28
     if remaining:
         draw.text((width / 2, y), f"осталось {format_until_next()}", font=subtitle, fill=GOLD, anchor="mt")
-        y += 22
+        y += 28
     return y
 
 
@@ -287,12 +292,12 @@ def render_scoreboard(
     avatars = avatars or {}
     people = list(players)
     stacked = len(people) != 1
-    logo = _logo(96)
+    logo = _logo(LOGO_WIDTH)
     title_h = _header_space(remaining=remaining)
-    gap = 14
-    outer = 20
+    gap = BOARD_GAP
+    outer = BOARD_OUTER
     if not people:
-        width = max(420, (logo.width if logo is not None else 160) + outer * 2)
+        width = max(BOARD_MIN_WIDTH, (logo.width if logo is not None else 220) + outer * 2)
         height = outer + title_h + outer
         image = Image.new("RGB", (width, height), BG)
         draw = ImageDraw.Draw(image)
@@ -312,8 +317,9 @@ def render_scoreboard(
     col_w = metrics["width"]
     row_h = metrics["height"]
     width = max(
+        BOARD_MIN_WIDTH,
         outer * 2 + cols * col_w + (cols - 1) * gap,
-        (logo.width if logo is not None else 160) + outer * 2,
+        (logo.width if logo is not None else 220) + outer * 2,
     )
     height = outer + title_h + rows_n * row_h + (rows_n - 1) * gap + outer
     image = Image.new("RGB", (width, height), BG)

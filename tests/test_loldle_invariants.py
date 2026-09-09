@@ -62,6 +62,25 @@ class StoreInvariantTests(unittest.TestCase):
         self.assertEqual(self.store.channel(10)["streak"], 0)
         self.assertEqual(self.store.today_players(10), [])
 
+    def test_empty_progress_from_finished_invite_still_publishes(self):
+        cog = Path("ogurec/cogs/loldle_cog.py").read_text()
+        on_progress = cog.split("async def on_progress", 1)[1].split("async def on_reset", 1)[0]
+        self.assertIn("self.store.add_starter(channel_id, int(user_id))", on_progress)
+        self.assertIn("_schedule_publish", on_progress)
+        self.assertNotIn("return existing", on_progress)
+
+    def test_scoreboard_message_uses_container_accent(self):
+        from ogurec.cogs.loldle_cog import BOARD_ACCENT, LoldleView
+
+        view = LoldleView("2026-09-09", content="stirk играет в LoLdle")
+        self.assertTrue(view.has_components_v2())
+        container = view.children[0]
+        self.assertEqual(int(container.accent_colour), BOARD_ACCENT)
+        kinds = [type(child).__name__ for child in container.children]
+        self.assertIn("TextDisplay", kinds)
+        self.assertIn("MediaGallery", kinds)
+        self.assertIn("ActionRow", kinds)
+
 
 class FakeWS:
     closed = False
