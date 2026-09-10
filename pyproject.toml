@@ -9,6 +9,7 @@ dependencies = [
     "loguru>=0.7.3",
     "pydantic-settings>=2.12.0",
     "aiosqlite>=0.20.0",
+    "pillow>=12.3.0",
 ]
 
 [project.scripts]
@@ -16,6 +17,10 @@ ogurec = "ogurec.cmd.main:main"
 
 [tool.uv]
 package = true
+
+[tool.setuptools.packages.find]
+include = ["ogurec*"]
+exclude = ["ogurec.activity.client.node_modules*"]
 
 [tool.ruff]
 line-length = 120

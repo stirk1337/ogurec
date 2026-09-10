@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="340" viewBox="0 0 1200 340" role="img" aria-labelledby="title desc">
+  <title id="title">Как устроен Ogurec</title>
+  <desc id="desc">Сообщение в Discord попадает в бота и расходится в LoLdle Activity, ответ LLM и Steam-presence.</desc>
+  <rect width="1200" height="340" rx="26" fill="#010A13"/>
+  <rect x="1.5" y="1.5" width="1197" height="337" rx="24.5" fill="none" stroke="#C8AA6E" stroke-opacity=".22"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <rect x="48" y="118" width="220" height="104" rx="16" fill="#0D242A" stroke="#38B9FF" stroke-width="2"/>
+    <text x="158" y="164" text-anchor="middle" fill="#38B9FF" font-size="18" font-weight="700" letter-spacing="2">DISCORD</text>
+    <text x="158" y="196" text-anchor="middle" fill="#F0E6D2" font-size="22" font-weight="600">канал</text>
+
+    <path d="M278 170h86" stroke="#C8AA6E" stroke-width="3"/>
+    <polygon points="364,170 348,162 348,178" fill="#C8AA6E"/>
+
+    <rect x="380" y="118" width="220" height="104" rx="16" fill="#0D242A" stroke="#C8AA6E" stroke-width="2"/>
+    <text x="490" y="164" text-anchor="middle" fill="#C8AA6E" font-size="18" font-weight="700" letter-spacing="2">OGUREC</text>
+    <text x="490" y="196" text-anchor="middle" fill="#F0E6D2" font-size="22" font-weight="600">бот и Activity</text>
+
+    <path d="M610 148h70" stroke="#C8AA6E" stroke-width="3"/>
+    <path d="M610 170h70" stroke="#C8AA6E" stroke-width="3"/>
+    <path d="M610 192h70" stroke="#C8AA6E" stroke-width="3"/>
+    <polygon points="690,148 674,140 674,156" fill="#C8AA6E"/>
+    <polygon points="690,170 674,162 674,178" fill="#C8AA6E"/>
+    <polygon points="690,192 674,184 674,200" fill="#C8AA6E"/>
+
+    <rect x="706" y="36" width="446" height="72" rx="14" fill="#0D242A" stroke="#09C02D" stroke-width="2"/>
+    <text x="929" y="64" text-anchor="middle" fill="#09C02D" font-size="18" font-weight="700">LoLdle Activity</text>
+    <text x="929" y="90" text-anchor="middle" fill="#F0E6D2" font-size="20">табло К Ц У Э С в чате</text>
+
+    <rect x="706" y="134" width="446" height="72" rx="14" fill="#0D242A" stroke="#38B9FF" stroke-width="2"/>
+    <text x="929" y="162" text-anchor="middle" fill="#38B9FF" font-size="18" font-weight="700">LLM-чат</text>
+    <text x="929" y="188" text-anchor="middle" fill="#F0E6D2" font-size="20">история канала · поиск</text>
+
+    <rect x="706" y="232" width="446" height="72" rx="14" fill="#0D242A" stroke="#DB800B" stroke-width="2"/>
+    <text x="929" y="260" text-anchor="middle" fill="#DB800B" font-size="18" font-weight="700">Steam presence</text>
+    <text x="929" y="286" text-anchor="middle" fill="#F0E6D2" font-size="20">игра из библиотеки раз в час</text>
+  </g>
+</svg>

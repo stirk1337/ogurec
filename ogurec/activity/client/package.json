@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@discord/embedded-app-sdk": "^2.4.0",
+    "crypto-js": "^4.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "scripts": {
+    "build": "esbuild src.js --bundle --minify --outfile=activity.js"
+  }
+}

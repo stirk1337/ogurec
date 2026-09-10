@@ -1,0 +1,10 @@
+services:
+  ogurec:
+    image: ghcr.io/stirk1337/ogurec:latest
+    env_file: .env
+    volumes:
+      - ogurec-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  ogurec-data:
