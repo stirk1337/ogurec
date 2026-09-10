@@ -507,7 +507,7 @@ class ConversationCog(commands.Cog):
             last_error = None
             e_429 = False
             try:
-                async for chunk in self.gpt_client.chat_completion(messages=messages, model="auto:fast"):
+                async for chunk in self.gpt_client.chat_completion(messages=messages, model="auto:smart"):
                     yield chunk
                 # Если дошли сюда, значит запрос успешен
                 logger.info(f"Success GPT API request, with model {self.gpt_client.last_model or 'unknown'}")
