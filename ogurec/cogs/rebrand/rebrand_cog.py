@@ -153,10 +153,10 @@ class Rebrand(commands.Cog):
             else:
                 logger.info("перешел на френдли ремайндер")
                 if channel.guild.name == self.last_guild_name:
-                    if abs((today_date - self.last_rebranding_date).days) == 1 and self.friendly_reminder == False:
+                    if abs((today_date - self.last_rebranding_date).days) == 0.5 and self.friendly_reminder == False:
                         await channel.send(f"<@{self.now_user}>, чувак ты делаешь ребрендинг так то {random_emoji}")
                         self.friendly_reminder = True
-                    if abs((today_date - self.last_rebranding_date).days) == 2:
+                    if abs((today_date - self.last_rebranding_date).days) == 1:
                         next_user = await self.swap_rebrand_user(channel)
 
                         await channel.send(f"<@{self.now_user}>, съебался, следующий на ребрендинге <@{next_user.id}> {random_emoji}")
