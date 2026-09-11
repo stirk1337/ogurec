@@ -370,6 +370,25 @@ class LoldleStore:
             self.save()
             return record
 
+    def play_targets(self, now: datetime | None = None) -> list[dict]:
+        today = loldle_day(self._now(now))
+        targets: list[dict] = []
+        for channel_id, state in self.channels():
+            board = self.board_id(channel_id, today, now=now)
+            if board:
+                targets.append(
+                    {"channel_id": channel_id, "message_id": board, "kind": "board", "day": today}
+                )
+            days = state.get("days") or {}
+            for day in sorted((item for item in days if item < today), reverse=True):
+                recap = message_id((days.get(day) or {}).get("recap_id"))
+                if recap:
+                    targets.append(
+                        {"channel_id": channel_id, "message_id": recap, "kind": "recap", "day": day}
+                    )
+                    break
+        return targets
+
     def add_starter(self, channel_id: int, user_id: int, now: datetime | None = None) -> dict:
         today = loldle_day(self._now(now))
         with self._lock:

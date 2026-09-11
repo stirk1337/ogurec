@@ -218,6 +218,26 @@ class LoldleStoreTests(unittest.TestCase):
         empty["progress"]["classic"]["attempts"] = 0
         self.assertIsNone(self.store.upsert_player(10, empty))
 
+    def test_play_targets_are_today_board_and_latest_recap(self):
+        self.store.upsert_player(10, player("1", day="2026-09-08", done=True))
+        self.store.set_recap_id(10, "2026-09-08", 111)
+        self.now = at("2026-09-09")
+        self.store.upsert_player(10, player("1", day="2026-09-09", done=True))
+        self.store.set_recap_id(10, "2026-09-09", 222)
+        self.store.set_board_id(10, 333)
+        self.assertEqual(
+            self.store.play_targets(),
+            [
+                {"channel_id": 10, "message_id": 333, "kind": "board", "day": "2026-09-09"},
+                {"channel_id": 10, "message_id": 111, "kind": "recap", "day": "2026-09-08"},
+            ],
+        )
+        self.now = at("2026-09-10")
+        self.assertEqual(
+            self.store.play_targets(),
+            [{"channel_id": 10, "message_id": 222, "kind": "recap", "day": "2026-09-09"}],
+        )
+
 
 class HelperTests(unittest.TestCase):
     def test_loldle_day_uses_paris_date(self):

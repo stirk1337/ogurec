@@ -111,6 +111,34 @@ class StoreInvariantTests(unittest.TestCase):
         )
         self.assertFalse(cog._is_today_board(message, "2026-09-09"))
 
+    def test_static_play_id_is_today_board(self):
+        from ogurec.cogs.loldle_cog import Loldle
+
+        cog = Loldle.__new__(Loldle)
+        cog.bot = SimpleNamespace(user=SimpleNamespace(id=42))
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=42),
+            flags=SimpleNamespace(components_v2=False),
+            components=[SimpleNamespace(custom_id="loldle:play", children=[])],
+        )
+        self.assertTrue(cog._is_today_board(message, "2026-09-09"))
+
+    def test_play_button_uses_persistent_static_id(self):
+        from ogurec.activity.loldle_store import PLAY_ID
+        from ogurec.cogs.loldle_cog import LoldleView
+
+        view = LoldleView("2026-09-09")
+        self.assertTrue(view.is_persistent())
+        self.assertEqual([item.custom_id for item in view.children], [PLAY_ID])
+        load = Path("ogurec/cogs/loldle_cog.py").read_text().split("async def cog_load", 1)[1].split(
+            "async def cog_unload", 1
+        )[0]
+        self.assertIn("add_view(LoldleView())", load)
+        handle = Path("ogurec/cogs/loldle_cog.py").read_text().split("async def handle_play", 1)[1].split(
+            "class PlayButton", 1
+        )[0]
+        self.assertLess(handle.find("launch_activity"), handle.find("touch_session"))
+
     def test_day_recap_has_play_button_for_today(self):
         cog = Path("ogurec/cogs/loldle_cog.py").read_text()
         recap = cog.split("async def _post_recap", 1)[1].split("async def _publish", 1)[0]

@@ -32,15 +32,24 @@ SESSION_GRACE = 120
 
 
 async def handle_play(interaction: discord.Interaction) -> None:
+    if not interaction.response.is_done():
+        try:
+            await interaction.response.launch_activity()
+        except Exception:
+            logger.exception("Failed to launch LoLdle activity")
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message("Не получилось запустить LoLdle.", ephemeral=True)
+                except discord.HTTPException:
+                    pass
+            return
     cog = interaction.client.get_cog("Loldle")
     if not isinstance(cog, Loldle):
-        if not interaction.response.is_done():
-            await interaction.response.launch_activity()
         return
-    cog.bind_user_channel(interaction)
-    if not interaction.response.is_done():
-        await interaction.response.launch_activity()
-    await cog.touch_session(interaction)
+    try:
+        await cog.touch_session(interaction)
+    except Exception:
+        logger.exception("Failed to open LoLdle session after launch")
 
 
 class PlayButton(discord.ui.DynamicItem[discord.ui.Button], template=r"loldle:play:(?P<day>\d{4}-\d{2}-\d{2})"):
@@ -73,12 +82,6 @@ class LoldleView(discord.ui.View):
     def __init__(self, day: str | None = None):
         super().__init__(timeout=None)
         self.day = day or loldle_day()
-        self.add_item(PlayButton(self.day))
-
-
-class LegacyLoldleView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
 
     @discord.ui.button(label="Играть", style=discord.ButtonStyle.success, custom_id=PLAY_ID)
     async def play(self, interaction: discord.Interaction, _button: discord.ui.Button):
@@ -106,7 +109,7 @@ class Loldle(commands.Cog):
 
     async def cog_load(self):
         self.bot.add_dynamic_items(PlayButton)
-        self.bot.add_view(LegacyLoldleView())
+        self.bot.add_view(LoldleView())
         self.reset_loop.start()
 
     async def cog_unload(self):
@@ -327,6 +330,10 @@ class Loldle(commands.Cog):
     @reset_loop.before_loop
     async def before_reset_loop(self):
         await self.bot.wait_until_ready()
+        try:
+            await self._restore_play_buttons()
+        except Exception:
+            logger.exception("Failed to restore LoLdle play buttons")
 
     async def _post_recap(self, job: dict) -> None:
         channel_id = int(job["channel_id"])
@@ -610,13 +617,10 @@ class Loldle(commands.Cog):
             return False
         if self.bot.user is None or message.author.id != self.bot.user.id:
             return False
-        want = play_custom_id(today)
-        for custom_id in iter_custom_ids(message.components):
-            if custom_id == want:
-                return True
-            if play_id_day(custom_id) not in (None, today) and custom_id != PLAY_ID:
-                return False
-        return False
+        ids = iter_custom_ids(message.components)
+        if any(play_id_day(custom_id) not in (None, today) for custom_id in ids):
+            return False
+        return PLAY_ID in ids or play_custom_id(today) in ids
 
     async def _freeze_board(self, channel: discord.abc.Messageable, board_id: int | None) -> None:
         if not board_id:
@@ -629,6 +633,54 @@ class Loldle(commands.Cog):
             await message.edit(view=None)
         except (discord.HTTPException, TypeError, ValueError):
             logger.exception("Failed to freeze yesterday LoLdle board")
+
+    def _has_static_play(self, message: discord.Message) -> bool:
+        return PLAY_ID in iter_custom_ids(message.components)
+
+    async def _restore_play_buttons(self) -> None:
+        for target in self.store.play_targets():
+            channel = await self._messageable(int(target["channel_id"]))
+            fetch = getattr(channel, "fetch_message", None) if channel is not None else None
+            if fetch is None:
+                continue
+            try:
+                message = await fetch(int(target["message_id"]))
+            except (discord.HTTPException, TypeError, ValueError):
+                continue
+            if self._has_static_play(message) and not self._is_components_v2(message):
+                continue
+            try:
+                await message.edit(view=LoldleView())
+            except discord.HTTPException:
+                await self._repost_with_play(channel, message, target)
+            except Exception:
+                logger.exception("Failed to restore LoLdle play button {}", target)
+
+    async def _repost_with_play(
+        self,
+        channel: discord.abc.Messageable,
+        message: discord.Message,
+        target: dict,
+    ) -> None:
+        files = [await attachment.to_file() for attachment in message.attachments]
+        payload: dict = {
+            "content": message.content or "",
+            "view": LoldleView(),
+            "allowed_mentions": discord.AllowedMentions.none(),
+        }
+        if files:
+            payload["files"] = files
+        try:
+            await message.delete()
+        except discord.HTTPException:
+            pass
+        sent = await channel.send(**payload)
+        channel_id = int(target["channel_id"])
+        if target.get("kind") == "board":
+            self.store.set_board_id(channel_id, sent.id)
+            self.boards[channel_id] = sent
+        elif target.get("kind") == "recap":
+            self.store.set_recap_id(channel_id, str(target.get("day") or ""), sent.id)
 
     async def _card(
         self,
