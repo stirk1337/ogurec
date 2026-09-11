@@ -24,6 +24,7 @@ LOGO_WIDTH = 220
 BOARD_MIN_WIDTH = 900
 BOARD_OUTER = 32
 BOARD_GAP = 18
+BOARD_STRIPE = 14
 LINE = (58, 48, 32)
 GOOD = (9, 192, 45)
 PARTIAL = (219, 128, 11)
@@ -281,6 +282,14 @@ def _header(
     return y
 
 
+def _png(image: Image.Image) -> BytesIO:
+    ImageDraw.Draw(image).rectangle((0, 0, BOARD_STRIPE - 1, image.height - 1), fill=GOLD)
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return buffer
+
+
 def render_scoreboard(
     players: list[dict],
     avatars: dict[str, Image.Image] | None = None,
@@ -302,10 +311,7 @@ def render_scoreboard(
         image = Image.new("RGB", (width, height), BG)
         draw = ImageDraw.Draw(image)
         _header(image, draw, width, outer, title, remaining=remaining)
-        buffer = BytesIO()
-        image.save(buffer, format="PNG")
-        buffer.seek(0)
-        return buffer
+        return _png(image)
 
     boards = []
     metrics = _card_metrics(stacked=stacked)
@@ -343,7 +349,4 @@ def render_scoreboard(
             stacked,
         )
 
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    buffer.seek(0)
-    return buffer
+    return _png(image)

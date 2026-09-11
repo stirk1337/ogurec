@@ -69,17 +69,57 @@ class StoreInvariantTests(unittest.TestCase):
         self.assertIn("_schedule_publish", on_progress)
         self.assertNotIn("return existing", on_progress)
 
-    def test_scoreboard_message_uses_container_accent(self):
-        from ogurec.cogs.loldle_cog import BOARD_ACCENT, LoldleView
+    def test_loldle_slash_must_not_send_components_v2(self):
+        import json
+        from io import BytesIO
 
-        view = LoldleView("2026-09-09", content="stirk играет в LoLdle")
-        self.assertTrue(view.has_components_v2())
-        container = view.children[0]
-        self.assertEqual(int(container.accent_colour), BOARD_ACCENT)
-        kinds = [type(child).__name__ for child in container.children]
-        self.assertIn("TextDisplay", kinds)
-        self.assertIn("MediaGallery", kinds)
-        self.assertIn("ActionRow", kinds)
+        import discord
+        from discord.http import handle_message_parameters
+
+        from ogurec.cogs.loldle_cog import LoldleView
+
+        view = LoldleView("2026-09-09")
+        self.assertFalse(
+            view.has_components_v2(),
+            "LayoutView + embed=None on /loldle sends embeds:[] with IS_COMPONENTS_V2; Discord rejects it",
+        )
+        params = handle_message_parameters(
+            content="stirk играет в LoLdle",
+            attachments=[discord.File(BytesIO(b"png"), filename="loldle.png")],
+            view=view,
+        )
+        raw = params.multipart[0]["value"] if params.multipart else json.dumps(params.payload)
+        payload = json.loads(raw)
+        self.assertFalse(bool((payload.get("flags") or 0) & (1 << 15)), payload)
+        self.assertNotIn("embeds", payload)
+
+    def test_loldle_slash_posts_via_followup(self):
+        cog = Path("ogurec/cogs/loldle_cog.py").read_text()
+        show = cog.split("async def show_today", 1)[1].split("async def on_progress", 1)[0]
+        self.assertIn("followup.send", show)
+        self.assertNotIn("edit_original_response", show)
+
+    def test_v2_scoreboard_is_not_editable_today_board(self):
+        from ogurec.cogs.loldle_cog import Loldle
+
+        cog = Loldle.__new__(Loldle)
+        cog.bot = SimpleNamespace(user=SimpleNamespace(id=42))
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=42),
+            flags=SimpleNamespace(components_v2=True),
+            components=[SimpleNamespace(custom_id="loldle:play:2026-09-09", children=[])],
+        )
+        self.assertFalse(cog._is_today_board(message, "2026-09-09"))
+
+    def test_day_recap_has_play_button_for_today(self):
+        cog = Path("ogurec/cogs/loldle_cog.py").read_text()
+        recap = cog.split("async def _post_recap", 1)[1].split("async def _publish", 1)[0]
+        self.assertIn("play=True", recap)
+        self.assertIn("day=loldle_day()", recap)
+        self.assertNotIn("play=False", recap)
+        rewrite = cog.split("async def _rewrite_day_card", 1)[1].split("def _channel", 1)[0]
+        self.assertIn("play = recap_id is not None and mid == recap_id", rewrite)
+        self.assertIn("day=loldle_day() if play else None", rewrite)
 
 
 class FakeWS:

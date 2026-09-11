@@ -297,6 +297,8 @@ class ScoreboardTests(unittest.TestCase):
         self.assertGreater(Image.open(filled).height, Image.open(recap).height)
         self.assertGreaterEqual(Image.open(filled).width, 800)
         self.assertGreaterEqual(Image.open(with_timer).width, 800)
+        stripe = Image.open(filled).getpixel((0, Image.open(filled).height // 2))
+        self.assertEqual(stripe[:3], (200, 170, 110))
 
 
 if __name__ == "__main__":
