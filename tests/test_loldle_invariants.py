@@ -93,11 +93,25 @@ class StoreInvariantTests(unittest.TestCase):
         self.assertFalse(bool((payload.get("flags") or 0) & (1 << 15)), payload)
         self.assertNotIn("embeds", payload)
 
-    def test_loldle_slash_posts_via_followup(self):
+    def test_loldle_slash_turns_thinking_into_board(self):
         cog = Path("ogurec/cogs/loldle_cog.py").read_text()
         show = cog.split("async def show_today", 1)[1].split("async def on_progress", 1)[0]
-        self.assertIn("followup.send", show)
-        self.assertNotIn("edit_original_response", show)
+        self.assertIn("edit_original_response", show)
+        self.assertNotIn("followup.send", show)
+
+    def test_replace_board_sends_before_deleting(self):
+        cog = Path("ogurec/cogs/loldle_cog.py").read_text()
+        fn = cog.split("async def _replace_board", 1)[1].split("def _caption", 1)[0]
+        self.assertLess(fn.find("_send_board"), fn.find("message.delete"))
+
+    def test_today_board_lookup_does_not_delete(self):
+        cog = Path("ogurec/cogs/loldle_cog.py").read_text()
+        fn = cog.split("async def _today_board", 1)[1].split("def _is_components_v2", 1)[0]
+        self.assertNotIn("delete", fn)
+        self.assertNotIn("_drop_board", fn)
+        touch = cog.split("async def touch_session", 1)[1].split("async def show_today", 1)[0]
+        self.assertIn("_schedule_publish", touch)
+        self.assertNotIn("await self._publish(channel)", touch)
 
     def test_v2_scoreboard_is_not_editable_today_board(self):
         from ogurec.cogs.loldle_cog import Loldle
@@ -138,6 +152,30 @@ class StoreInvariantTests(unittest.TestCase):
             "class PlayButton", 1
         )[0]
         self.assertLess(handle.find("launch_activity"), handle.find("touch_session"))
+
+    def test_play_logs_include_http_details(self):
+        from ogurec.cogs.loldle_cog import http_detail, play_ctx
+
+        exc = SimpleNamespace(status=400, code=50035, text="Invalid Form Body")
+        self.assertEqual(http_detail(exc), "status=400 code=50035 text='Invalid Form Body'")
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=7),
+            channel_id=10,
+            guild_id=11,
+            message=SimpleNamespace(id=12, flags=SimpleNamespace(components_v2=False)),
+            data={"custom_id": "loldle:play"},
+            type=SimpleNamespace(name="component"),
+            response=SimpleNamespace(is_done=lambda: False),
+        )
+        ctx = play_ctx(interaction)
+        self.assertIn("user=7", ctx)
+        self.assertIn("channel=10", ctx)
+        self.assertIn("message=12", ctx)
+        self.assertIn("custom_id=loldle:play", ctx)
+        cog = Path("ogurec/cogs/loldle_cog.py").read_text()
+        self.assertIn('logger.info("loldle click {}"', cog)
+        self.assertIn('logger.info("loldle launch ok {}"', cog)
+        self.assertIn("loldle activity socket open", Path("ogurec/activity/server.py").read_text())
 
     def test_day_recap_has_play_button_for_today(self):
         cog = Path("ogurec/cogs/loldle_cog.py").read_text()

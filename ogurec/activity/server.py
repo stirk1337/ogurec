@@ -180,6 +180,7 @@ class ActivityServer:
             await ws.close(code=1008, message=b"Missing instance")
             return ws
         self.rooms[room].add(ws)
+        logger.info("loldle activity socket open instance={} peers={}", room, len(self.rooms[room]))
         for state in self.states.get(room, {}).values():
             await ws.send_str(json.dumps(state))
         try:
@@ -188,6 +189,11 @@ class ActivityServer:
                     await self._publish(room, message.data)
         finally:
             self.rooms[room].discard(ws)
+            logger.info(
+                "loldle activity socket close instance={} peers={}",
+                room,
+                len(self.rooms.get(room, ())),
+            )
             if not self.rooms[room]:
                 self.rooms.pop(room, None)
                 self.states.pop(room, None)
