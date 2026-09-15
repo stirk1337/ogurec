@@ -634,6 +634,8 @@ class ConversationCog(commands.Cog):
         await interaction.response.send_message("✅ История чата сброшена!", ephemeral=True)
 
     @app_commands.command(description="Показать, что бот запомнил о человеке")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
     async def memory(self, interaction: discord.Interaction, user: discord.User | None = None):
         if not self.memory:
             await interaction.response.send_message("Память выключена.", ephemeral=True)
@@ -645,6 +647,8 @@ class ConversationCog(commands.Cog):
         await interaction.response.send_message(text[:2000], ephemeral=True)
 
     @app_commands.command(description="Пересобрать досье по накопленным сообщениям, не дожидаясь ночи")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
     async def rebuild_memory(self, interaction: discord.Interaction):
         if not self.memory:
             await interaction.response.send_message("Память выключена.", ephemeral=True)
@@ -653,6 +657,12 @@ class ConversationCog(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         await self.memory.rebuild_all()
         await interaction.followup.send("Досье пересобраны.", ephemeral=True)
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        if isinstance(error, app_commands.MissingPermissions):
+            await interaction.response.send_message("Не для тебя команда.", ephemeral=True)
+            return
+        raise error
 
     @commands.Cog.listener()
     async def on_message(self, message: Message):
