@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     mood_hours: int = 3  # настроение держится часами, а не меняется каждый ответ
 
     memory_enabled: bool = True
+    memory_prompt_chance: int = 30  # % запросов, где досье вообще попадает в промпт
     memory_rebuild_hour: int = 5  # ночная пересборка досье, до утреннего отчета
     memory_burst_messages: int = 200  # столько сообщений за день — пересобрать не дожидаясь ночи
     memory_history_limit: int = 300  # сколько последних сообщений уходит в пересборку

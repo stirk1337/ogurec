@@ -188,12 +188,12 @@ class ConversationCog(commands.Cog):
             elif isinstance(activity, discord.Spotify):
                 info_parts.append(f"Слушает трек Spotify: {activity.title} автора {activity.artist}")
 
-        facts = self.memory.facts(user.id) if self.memory else ""
-        if facts:
-            # в промпт идет случайная часть досье: иначе бот долбит одними и теми же фактами
-            lines = [line for line in facts.splitlines() if line.strip()]
-            picked = random.sample(lines, min(3, len(lines)))
-            info_parts.append("Что ты про него помнишь: " + "; ".join(picked))
+        # досье подмешиваем изредка: если совать в каждый запрос, бот долбит одними и теми же фактами
+        if self.memory and random.randint(1, 100) <= self.settings.memory_prompt_chance:
+            lines = [line for line in self.memory.facts(user.id).splitlines() if line.strip()]
+            if lines:
+                picked = random.sample(lines, min(3, len(lines)))
+                info_parts.append("Что ты про него помнишь: " + "; ".join(picked))
 
         return ". ".join(info_parts)
 
