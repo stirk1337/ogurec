@@ -17,12 +17,14 @@ from ogurec.chatgpt import GPTClient, GPTClientError, RateLimitError
 from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
 from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.config.settings import Settings
-from ogurec.decision import decide_action
 from ogurec.memory import UserMemory
 from ogurec.search import SearchService
 from ogurec.utils import TIME_ZONE, fix_discord_format, get_random_sticker
 
 GIF_RANDOM_RANGE = 600
+MESSAGE_RANDOM_RANGE = 450
+REACTION_RANDOM_RANGE = 650
+MESSAGE_GUARANTEE_LIMIT = 750
 # история живет дольше тишины, после которой бот пишет сам (proactive_silence_minutes)
 HISTORY_TIMEOUT_MINUTES = 60
 
@@ -61,6 +63,7 @@ class ConversationCog(commands.Cog):
         memory: UserMemory | None = None,
     ):
         self.bot = bot
+        self.message_counter = 0
         self.gpt_client = gpt_client
 
         self.settings = settings
@@ -338,17 +341,6 @@ class ConversationCog(commands.Cog):
         self.reply_times[channel_id] = recent
         return len(recent) < self.settings.replies_per_minute
 
-    def _recent_lines(self, channel_id: int, limit: int = 12) -> list[str]:
-        """Последние реплики канала в виде 'кто: что' — вход для решения о реплике."""
-        lines = []
-        for msg in self._get_channel_history(channel_id)[-limit:]:
-            role = msg.get("role")
-            if role == "system":
-                continue
-            who = "Ogurec" if role == "assistant" else msg.get("name", "кто-то")
-            lines.append(f"{who}: {msg.get('content', '')[:200]}")
-        return lines
-
     def _schedule_batch(self, channel_id: int):
         """Перезапускает таймер: отвечаем, когда чат замолчал на reply_debounce_seconds."""
         if channel_id in self.batch_busy:
@@ -378,6 +370,15 @@ class ConversationCog(commands.Cog):
             if self.pending[channel_id]:
                 self._schedule_batch(channel_id)
 
+    def _roll_action(self, batch: list[Message]) -> str:
+        """Кубик на всю пачку: ответить, поставить реакцию или промолчать."""
+        for _ in batch:
+            self.message_counter += 1
+            if self._roll(1, 2, max_value=MESSAGE_RANDOM_RANGE) or self.message_counter >= MESSAGE_GUARANTEE_LIMIT:
+                self.message_counter = 0
+                return "reply"
+        return "react" if self._roll(*range(3, 11), max_value=REACTION_RANDOM_RANGE) else "skip"
+
     async def _handle_batch(self, channel_id: int, batch: list[Message]):
         last = batch[-1]
         mentioned = any(self.bot.user.mentioned_in(m) for m in batch)
@@ -386,11 +387,9 @@ class ConversationCog(commands.Cog):
             action = "reply"
         elif not self._cooldown_ok(channel_id):
             logger.info(f"Потолок ответов в минуту, канал {channel_id}")
-            action = "react" if random.randint(1, 100) <= 30 else "skip"
+            action = "skip"
         else:
-            action = await decide_action(
-                self._recent_lines(channel_id), self.gpt_client, self.settings.fast_model
-            )
+            action = self._roll_action(batch)
 
         try:
             if action == "reply":
