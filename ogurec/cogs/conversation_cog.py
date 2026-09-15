@@ -27,6 +27,7 @@ REACTION_RANDOM_RANGE = 650
 MESSAGE_GUARANTEE_LIMIT = 750
 # история живет дольше тишины, после которой бот пишет сам (proactive_silence_minutes)
 HISTORY_TIMEOUT_MINUTES = 60
+HISTORY_MESSAGES_LIMIT = 25  # сколько последних реплик уходит в модель
 
 BOT_MOODS = [
     "сегодня ты злой и цепляешься к словам",
@@ -140,7 +141,9 @@ class ConversationCog(commands.Cog):
             "выдаешь ровно столько пунктов, сколько попросили, с деталями и конкретикой: именами, цифрами, фактами. "
             "Не жмешься и не отделываешься одной строкой там, где просили разбор. "
             "Пишешь без вежливых формул, заголовков и предложений помочь. Токсишь и подъебываешь, но по делу. "
-            "Не пересказываешь то, что и так видно в чате, и не объясняешь свои шутки.\n"
+            "Не пересказываешь то, что и так видно в чате, и не объясняешь свои шутки. "
+            "Свои прошлые реплики видно выше — не повторяй их темы, примеры и шутки: "
+            "если про что-то уже шутил, заходи с другого, а не переписывай то же самое другими словами.\n"
             f"{STYLE_EXAMPLES}\n"
         )
         content += f"Сейчас {now:%d.%m.%Y %H:%M}, сервер называется {guild_name}. "
@@ -187,7 +190,10 @@ class ConversationCog(commands.Cog):
 
         facts = self.memory.facts(user.id) if self.memory else ""
         if facts:
-            info_parts.append("Что ты про него помнишь: " + facts.replace("\n", "; "))
+            # в промпт идет случайная часть досье: иначе бот долбит одними и теми же фактами
+            lines = [line for line in facts.splitlines() if line.strip()]
+            picked = random.sample(lines, min(3, len(lines)))
+            info_parts.append("Что ты про него помнишь: " + "; ".join(picked))
 
         return ". ".join(info_parts)
 
@@ -462,8 +468,11 @@ class ConversationCog(commands.Cog):
         if mentioned_users_info:
             info_parts.append(mentioned_users_info)
 
-        # Собираем messages для GPT: история + временный контекст (в историю не сохраняем)
-        messages_for_gpt = list(history)
+        # Собираем messages для GPT: системные сообщения + хвост разговора.
+        # Весь час истории гнать нельзя: бот начинает переписывать сам себя по кругу
+        system_messages = [m for m in history if m.get("role") == "system"]
+        talk = [m for m in history if m.get("role") != "system"][-HISTORY_MESSAGES_LIMIT:]
+        messages_for_gpt = system_messages + talk
         if info_parts:
             messages_for_gpt.append({"role": "system", "content": " ".join(info_parts)})
         if search_context:
