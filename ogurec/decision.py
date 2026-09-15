@@ -21,17 +21,23 @@ async def decide_action(recent_lines: list[str], gpt_client, model: str = "auto:
         {"role": "system", "content": DECISION_SYSTEM_PROMPT},
         {"role": "user", "content": "\n".join(recent_lines[-12:])[:2000]},
     ]
-    try:
-        result = ""
-        async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=5, model=model):
-            result += chunk
-    except Exception as e:
-        logger.warning(f"decide_action error: {e}")
-        return "skip"
 
-    word = result.strip().lower()
-    for action in ACTIONS:
-        if action in word:
-            logger.info(f"decide_action -> {action}")
-            return action
+    # пул провайдеров флапает: первая попытка часто ловит 502/429, вторая уходит к живому
+    for attempt in range(2):
+        try:
+            result = ""
+            async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=5, model=model):
+                result += chunk
+        except Exception as e:
+            logger.warning(f"decide_action error (попытка {attempt + 1}): {e}")
+            continue
+
+        word = result.strip().lower()
+        for action in ACTIONS:
+            if action in word:
+                logger.info(f"decide_action -> {action}")
+                return action
+        logger.info(f"decide_action: непонятный ответ {word[:60]!r}")
+        break
+
     return "skip"

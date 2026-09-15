@@ -36,18 +36,26 @@ async def search_query_llm(text: str, gpt_client, model: str = "auto:fast") -> O
         {"role": "system", "content": LLM_SEARCH_SYSTEM_PROMPT},
         {"role": "user", "content": text[:500]},
     ]
-    try:
-        result = ""
-        async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=64, model=model):
-            result += chunk
-        query = result.strip().strip('"').strip()
+    # пул провайдеров флапает: первая попытка часто ловит 502/429, вторая уходит к живому
+    for attempt in range(2):
+        try:
+            result = ""
+            async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=64, model=model):
+                result += chunk
+        except Exception as e:
+            logger.warning(f"search_query_llm error (попытка {attempt + 1}): {e}")
+            continue
+
+        # часть моделей сливает свои рассуждения в ответ — берем последнюю строку
+        lines = [line.strip().strip('"') for line in result.splitlines() if line.strip()]
+        query = lines[-1] if lines else ""
         logger.info(f"search_query_llm -> {query!r}")
-        if not query or query.upper() == "N":
+        if not query or query.upper() == "N" or len(query) > 200:
             return None
-        return query[:300]
-    except Exception as e:
-        logger.warning(f"search_query_llm error: {e}")
-        return None
+        return query
+
+    return None
+
 
 def _is_blocked_url(url: str) -> bool:
     u = url.lower()

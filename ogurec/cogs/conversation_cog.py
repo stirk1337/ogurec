@@ -13,7 +13,7 @@ from discord.ext import commands, tasks
 from loguru import logger
 
 from ogurec.bot import OgurecBot
-from ogurec.chatgpt import GPTClient, RateLimitError
+from ogurec.chatgpt import GPTClient, GPTClientError, RateLimitError
 from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
 from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.config.settings import Settings
@@ -555,6 +555,8 @@ class ConversationCog(commands.Cog):
         Выполняет запрос к GPT.
         """
         max_retries = 20  # Максимальное количество попыток удаления сообщений
+        upstream_retries = 0  # 502 от пула провайдеров — не наша вина, пробуем еще раз
+        started = False  # часть ответа уже ушла в чат: повтор дал бы дубль
 
         for retry_attempt in range(max_retries):
             logger.info(retry_attempt)
@@ -562,6 +564,7 @@ class ConversationCog(commands.Cog):
             e_429 = False
             try:
                 async for chunk in self.gpt_client.chat_completion(messages=messages, model="auto:smart"):
+                    started = True
                     yield chunk
                 # Если дошли сюда, значит запрос успешен
                 logger.info(f"Success GPT API request, with model {self.gpt_client.last_model or 'unknown'}")
@@ -571,6 +574,15 @@ class ConversationCog(commands.Cog):
                 e_429 = True
                 last_error = e
                 logger.info(f"{e}")
+            except GPTClientError as e:
+                last_error = e
+                logger.warning(f"Ошибка провайдера: {e}")
+                if not started and upstream_retries < 2:
+                    upstream_retries += 1
+                    await asyncio.sleep(2)
+                    logger.info(f"Повтор после ошибки провайдера ({upstream_retries}/2)")
+                    continue
+                raise
             except Exception as e:
                 # При других ошибках считаем, что это не 429
                 last_error = e
