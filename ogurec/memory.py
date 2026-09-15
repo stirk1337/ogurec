@@ -60,9 +60,17 @@ class UserMemory:
             name TEXT,
             channel_id INTEGER,
             content TEXT NOT NULL,
-            created_at INTEGER NOT NULL
+            created_at INTEGER NOT NULL,
+            discord_id INTEGER
         )
         """)
+        async with self.conn.execute("PRAGMA table_info(messages)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if "discord_id" not in columns:
+            await self.conn.execute("ALTER TABLE messages ADD COLUMN discord_id INTEGER")
+        await self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_discord_id ON messages(discord_id) WHERE discord_id IS NOT NULL"
+        )
         await self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_messages_user_time ON messages(user_id, created_at)"
         )
@@ -77,16 +85,42 @@ class UserMemory:
     def facts(self, user_id: int) -> str:
         return self._cache.get(user_id, "")
 
-    async def note_message(self, user_id: int, name: str, channel_id: int, text: str) -> bool:
-        """Кладет сообщение в индекс. True — человек разошелся, досье стоит пересобрать не дожидаясь ночи."""
+    async def _store_message(
+        self,
+        user_id: int,
+        name: str,
+        channel_id: int,
+        text: str,
+        *,
+        discord_id: int | None = None,
+        created_at: int | None = None,
+    ) -> bool:
         if not self.enabled or not text.strip():
             return False
 
-        await self.conn.execute(
-            "INSERT INTO messages(user_id, name, channel_id, content, created_at) VALUES(?, ?, ?, ?, ?)",
-            (user_id, name, channel_id, text[:500], int(time.time())),
+        cursor = await self.conn.execute(
+            "INSERT OR IGNORE INTO messages(user_id, name, channel_id, content, created_at, discord_id) "
+            "VALUES(?, ?, ?, ?, ?, ?)",
+            (user_id, name, channel_id, text[:500], created_at or int(time.time()), discord_id),
         )
         await self.conn.commit()
+        return cursor.rowcount > 0
+
+    async def note_message(
+        self,
+        user_id: int,
+        name: str,
+        channel_id: int,
+        text: str,
+        *,
+        discord_id: int | None = None,
+        created_at: int | None = None,
+    ) -> bool:
+        """Кладет сообщение в индекс. True — человек разошелся, досье стоит пересобрать не дожидаясь ночи."""
+        if not await self._store_message(
+            user_id, name, channel_id, text, discord_id=discord_id, created_at=created_at
+        ):
+            return False
 
         self._since_rebuild[user_id] += 1
         if self._since_rebuild[user_id] < self.burst_messages:
@@ -94,6 +128,30 @@ class UserMemory:
 
         self._since_rebuild[user_id] = 0
         return True
+
+    async def ingest_messages(self, messages) -> int:
+        """Пишет чужие текстовые сообщения в индекс. Не запускает внеочередную пересборку."""
+        added = 0
+        async for message in _as_async_iter(messages):
+            author = message.author
+            if getattr(author, "bot", False):
+                continue
+            text = getattr(message, "content", "") or ""
+            if not text.strip():
+                continue
+            channel = getattr(message, "channel", None)
+            created = getattr(message, "created_at", None)
+            created_at = int(created.timestamp()) if created is not None else int(time.time())
+            if await self._store_message(
+                author.id,
+                author.name,
+                getattr(channel, "id", 0) or 0,
+                text,
+                discord_id=getattr(message, "id", None),
+                created_at=created_at,
+            ):
+                added += 1
+        return added
 
     async def rebuild(self, user_id: int, name: str):
         """Пересобирает досье одного человека по его последним сообщениям."""
@@ -163,8 +221,12 @@ class UserMemory:
 
         async with self.conn.execute(query, params) as cursor:
             users = await cursor.fetchall()
+        async with self.conn.execute("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM messages") as cursor:
+            total, people = await cursor.fetchone()
 
-        logger.info(f"Память: пересборка досье, людей {len(users)}")
+        logger.info(
+            f"Память: пересборка досье, людей {len(users)} (в индексе {people} людей, {total} сообщений)"
+        )
         for user_id, name in users:
             await self.rebuild(user_id, name or str(user_id))
             await asyncio.sleep(5)  # не долбить пул провайдеров очередью подряд
@@ -176,3 +238,12 @@ class UserMemory:
         await self.conn.commit()
         if cursor.rowcount:
             logger.info(f"Память: удалено {cursor.rowcount} сообщений старше {self.keep_days} дней")
+
+
+async def _as_async_iter(messages):
+    if hasattr(messages, "__aiter__"):
+        async for message in messages:
+            yield message
+        return
+    for message in messages:
+        yield message

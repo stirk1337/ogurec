@@ -1,7 +1,7 @@
 import asyncio
 import json
 import random
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from typing import Any
 from datetime import datetime as dt
 from collections import defaultdict
@@ -646,6 +646,26 @@ class ConversationCog(commands.Cog):
         text = f"Досье на {target.display_name}:\n{facts}" if facts else f"На {target.display_name} досье пока нет."
         await interaction.response.send_message(text[:2000], ephemeral=True)
 
+    async def _memory_channels(self):
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                yield channel
+                for thread in getattr(channel, "threads", []):
+                    yield thread
+
+    async def _pull_recent_messages(self, after: datetime) -> int:
+        async def history():
+            async for channel in self._memory_channels():
+                try:
+                    async for message in channel.history(after=after, limit=None):
+                        yield message
+                except (discord.Forbidden, discord.HTTPException) as error:
+                    logger.warning(f"Память: не смог прочитать {channel}: {error}")
+
+        added = await self.memory.ingest_messages(history())
+        logger.info(f"Память: подтянул из Discord {added} новых сообщений с {after:%Y-%m-%d %H:%M} UTC")
+        return added
+
     @app_commands.command(description="Пересобрать досье по накопленным сообщениям, не дожидаясь ночи")
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
@@ -655,8 +675,10 @@ class ConversationCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        await self.memory.rebuild_all(since_hours=None)
-        await interaction.followup.send("Досье пересобраны.", ephemeral=True)
+        after = datetime.now(timezone.utc) - timedelta(hours=24)
+        pulled = await self._pull_recent_messages(after)
+        await self.memory.rebuild_all(since_hours=24)
+        await interaction.followup.send(f"Досье пересобраны. Подтянул {pulled} сообщений за сутки.", ephemeral=True)
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.MissingPermissions):
@@ -683,7 +705,12 @@ class ConversationCog(commands.Cog):
         self._add_user_message(channel_id, message.content, message.author.name)
 
         if self.memory and await self.memory.note_message(
-            message.author.id, message.author.name, channel_id, message.content
+            message.author.id,
+            message.author.name,
+            channel_id,
+            message.content,
+            discord_id=message.id,
+            created_at=int(message.created_at.timestamp()),
         ):
             logger.info(f"Память: {message.author.name} разошелся, пересобираю досье вне очереди")
             asyncio.create_task(self.memory.rebuild(message.author.id, message.author.name))
@@ -703,6 +730,8 @@ class ConversationCog(commands.Cog):
 
         self.last_memory_date = now.date()
         try:
+            after = datetime.now(timezone.utc) - timedelta(hours=24)
+            await self._pull_recent_messages(after)
             await self.memory.rebuild_all()
             await self.memory.cleanup()
         except Exception:
