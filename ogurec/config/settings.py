@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     main_chat_id: int = 670981415306788870
     api_base_url: str = "https://freellmapi.stirk1337.ru/v1/chat/completions"
     llm_model: str = "auto" # auto, auto:smart, auto:fast
+    search_query_model: str = "auto:fast"
     search_enabled: bool = True
     search_max_results: int = 5
     search_context_chars: int = 5000

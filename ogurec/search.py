@@ -17,39 +17,37 @@ VIDEO_BLOCKLIST = (
 )
 
 LLM_SEARCH_SYSTEM_PROMPT = (
-    "Ты классификатор вопросов. Прочитав сообщение пользователя, определи является ли оно вопросом. "
-    "Если это вопрос — верни только одну букву Y. Если это не вопрос — верни только одну букву N."
-    "Если вопрос адресован боту и касается его состояния/действий (например: \"как дела\", \"что делаешь\", "
-    "\"чем занят\", \"как ты\", \"что делаешь сейчас\", \"как настроение\", \"как поживаешь\") — верни N, поиск не нужен."
-    "Отвечай строго одной буквой Y или N без пояснений, пробелов и переносов."
+    "Ты решаешь, нужен ли веб-поиск для сообщения пользователя. "
+    "Если поиск не нужен — верни ровно одну букву N. "
+    "Поиск не нужен, если это не вопрос, либо вопрос адресован боту и касается его состояния/действий "
+    "(например: \"как дела\", \"что делаешь\", \"чем занят\", \"как ты\", \"как настроение\"). "
+    "Если поиск нужен — верни поисковый запрос для гугла: короткая формулировка из ключевых слов "
+    "без местоимений, обращений и лишних слов, на языке сообщения. "
+    "Отвечай либо буквой N, либо только запросом, без пояснений и кавычек."
 )
 
-async def is_question_llm(text: str, gpt_client) -> str:
+async def search_query_llm(text: str, gpt_client, model: str = "auto:fast") -> Optional[str]:
     """
-    Одна функция которая определяет нужен ли поиск через chat_completion (auto:fast, temperature=0).
-    Возвращает 'Y' если нужен поиск (вопрос), 'N' если нет.
-    Использует системное сообщение LLM_SEARCH_SYSTEM_PROMPT.
+    Один запрос в LLM: либо None (поиск не нужен), либо перефразированный запрос для поиска.
     """
-    if not text or not text.strip():
-        return False
-    if gpt_client is None:
-        return False
+    if not text or not text.strip() or gpt_client is None:
+        return None
     messages = [
         {"role": "system", "content": LLM_SEARCH_SYSTEM_PROMPT},
         {"role": "user", "content": text[:500]},
     ]
     try:
         result = ""
-        async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=5, model="auto:fast"):
+        async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=64, model=model):
             result += chunk
-        cleaned = result.strip().upper()
-        logger.info(result)
-        if not cleaned:
-            return False
-        return True if cleaned[0] == "Y" else False
+        query = result.strip().strip('"').strip()
+        logger.info(f"search_query_llm -> {query!r}")
+        if not query or query.upper() == "N":
+            return None
+        return query[:300]
     except Exception as e:
-        logger.warning(f"is_question_llm error: {e}")
-        return False
+        logger.warning(f"search_query_llm error: {e}")
+        return None
 
 def _is_blocked_url(url: str) -> bool:
     u = url.lower()
@@ -152,19 +150,20 @@ def _search_sync(query: str, max_results: int = 5) -> Optional[str]:
     return _ddgs_fallback(query, max_results)
 
 class SearchService:
-    def __init__(self, enabled: bool = True, max_results: int = 5, context_chars: int = 3500, gpt_client=None, **kwargs):
+    def __init__(self, enabled: bool = True, max_results: int = 5, context_chars: int = 3500, gpt_client=None, query_model: str = "auto:fast", **kwargs):
         if "enable" in kwargs:
             enabled = kwargs["enable"]
         self.enabled = enabled
         self.max_results = max_results
         self.context_chars = context_chars
         self.gpt_client = gpt_client
+        self.query_model = query_model
 
-    async def should_search_llm(self, text: str) -> str:
-        """LLM-версия should_search: возвращает 'Y'/'N' через is_question_llm (auto:fast, temp 0)."""
+    async def search_query(self, text: str) -> Optional[str]:
+        """Запрос для поиска или None, если поиск не нужен."""
         if not self.enabled:
-            return False
-        return await is_question_llm(text, self.gpt_client)
+            return None
+        return await search_query_llm(text, self.gpt_client, self.query_model)
 
     async def search(self, text: str) -> Optional[str]:
         if not self.enabled:

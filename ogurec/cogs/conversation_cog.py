@@ -17,7 +17,7 @@ from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
 from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.config.settings import Settings
 from ogurec.search import SearchService
-from ogurec.utils import TIME_ZONE, get_random_sticker
+from ogurec.utils import TIME_ZONE, fix_discord_format, get_random_sticker
 
 MESSAGE_RANDOM_RANGE = 450
 REACTION_RANDOM_RANGE = 650
@@ -319,18 +319,21 @@ class ConversationCog(commands.Cog):
             for u in getattr(message, "mentions", [])
         )
         search_context: str | None = None
-        if not has_user_mention and await self.search_service.should_search_llm(message.content):
-            try:
-                logger.info(f"search triggered for: {message.content[:80]}")
-                search_context = await self.search_service.search(message.content)
-                if search_context:
-                    logger.info(f"search ok, chars={len(search_context)}")
-                else:
-                    logger.info("search returned no results")
-            except Exception as e:
-                logger.warning(f"search error: {e}")
-        elif has_user_mention:
+        search_query: str | None = None
+        if has_user_mention:
             logger.info("search skipped: user mention detected")
+        else:
+            search_query = await self.search_service.search_query(message.content)
+            if search_query:
+                try:
+                    logger.info(f"search triggered: {search_query}")
+                    search_context = await self.search_service.search(search_query)
+                    if search_context:
+                        logger.info(f"search ok, chars={len(search_context)}")
+                    else:
+                        logger.info("search returned no results")
+                except Exception as e:
+                    logger.warning(f"search error: {e}")
 
         # Получить историю для этого канала с системными сообщениями
         history = self._get_channel_history(channel_id)
@@ -363,7 +366,7 @@ class ConversationCog(commands.Cog):
             search_msg = {
                 "role": "system",
                 "content": (
-                    f"Результаты веб-поиска по запросу пользователя \"{message.content[:120]}\":\n"
+                    f"Результаты веб-поиска по запросу \"{search_query}\":\n"
                     f"{search_context}\n"
                     "Используй эту информацию для ответа. Если в результатах нет ответа — честно скажи что не нашел. "
                     "Не выдумывай факты, опирайся на поиск."
@@ -389,18 +392,18 @@ class ConversationCog(commands.Cog):
                         buffer = ""
                         if len(content) > 2000:  # лимит Discord
                             content = content[-2000:]
-                        await sent_message.edit(content=content)
+                        await sent_message.edit(content=fix_discord_format(content, message.guild))
 
                 # Финальный кусок
                 if buffer:
                     content += buffer
                     if len(content) > 2000:
                         content = content[-2000:]
-                    await sent_message.edit(content=content)
+                    await sent_message.edit(content=fix_discord_format(content, message.guild))
                 
                 # Добавить ответ бота в историю
                 if content:
-                    self._add_assistant_message(channel_id, content)
+                    self._add_assistant_message(channel_id, fix_discord_format(content, message.guild))
 
                     # С шансом 5% отправить случайный стикер с сервера
                     if message.guild and message.guild.stickers and random.randint(1, 100) <= 25:
@@ -651,7 +654,7 @@ class ConversationCog(commands.Cog):
                 content += chunk
 
             if content:
-                await channel.send(content)
+                await channel.send(fix_discord_format(content, channel.guild))
 
             self.last_report_date = today
         except Exception as e:

@@ -34,6 +34,7 @@ async def amain():
         max_results=settings.search_max_results,
         context_chars=settings.search_context_chars,
         gpt_client=gpt_client,
+        query_model=settings.search_query_model,
     )
     await gif_storage.init()
     await activity_storage.init()
