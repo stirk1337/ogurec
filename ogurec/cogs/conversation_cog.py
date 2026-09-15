@@ -101,7 +101,7 @@ class ConversationCog(commands.Cog):
         self.last_memory_date = None
         self.generate_report.start()
         self.proactive_loop.start()
-        self.rebuild_memory.start()
+        self.rebuild_memory_loop.start()
 
     def _current_mood(self) -> str:
         """Настроение живет несколько часов, а не меняется от сообщения к сообщению."""
@@ -692,7 +692,7 @@ class ConversationCog(commands.Cog):
         self._schedule_batch(channel_id)
 
     @tasks.loop(minutes=5)
-    async def rebuild_memory(self):
+    async def rebuild_memory_loop(self):
         """Ночью пересобираем досье по индексу сообщений и чистим старые сообщения."""
         if not self.memory:
             return
@@ -708,7 +708,7 @@ class ConversationCog(commands.Cog):
         except Exception:
             logger.exception("Не смог пересобрать досье")
 
-    @rebuild_memory.before_loop
+    @rebuild_memory_loop.before_loop
     async def before_rebuild_memory(self):
         await self.bot.wait_until_ready()
 
