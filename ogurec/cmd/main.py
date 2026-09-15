@@ -1,6 +1,5 @@
 import asyncio
 
-from ogurec.activity.server import start_activity_server
 from ogurec.bot import OgurecBot
 from ogurec.chatgpt import GPTClient
 from ogurec.cogs.activity.game_activity_cog import GameActivity
@@ -15,6 +14,7 @@ from ogurec.cogs.utils_cog import Utils
 from ogurec.config.paths import data_file
 from ogurec.config.settings import Settings
 from ogurec.klipy import KlipyClient
+from ogurec.loldle.server import start_activity_server
 from ogurec.search import SearchService
 from ogurec.steam import SteamClient
 

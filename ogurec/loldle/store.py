@@ -1,208 +1,19 @@
+"""Файловое хранилище LoLdle: по каналу — дни, игроки, id сообщений и стрик."""
+
 import json
-import re
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from zoneinfo import ZoneInfo
 
 from ogurec.config.paths import data_file
+from ogurec.loldle.day import loldle_day, loldle_now, previous_day
+from ogurec.loldle.ids import coerce_channel_id, message_id
+from ogurec.loldle.rules import apply_player_update, day_has_win, player_has_progress, player_wins
 
-MODES = ("classic", "quote", "ability", "emoji", "splash")
-LOLDLE_TZ = ZoneInfo("Europe/Paris")
 STORE_PATH = data_file("loldle.json", "loldle.json")
-PLAY_ID = "loldle:play"
-
-
-def loldle_now() -> datetime:
-    return datetime.now(LOLDLE_TZ)
-
-
-def loldle_day(now: datetime | None = None) -> str:
-    return (now or loldle_now()).date().isoformat()
-
-
-def next_loldle(now: datetime | None = None) -> datetime:
-    current = now or loldle_now()
-    return (current + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def format_until_next(now: datetime | None = None) -> str:
-    total = max(0, int((next_loldle(now) - (now or loldle_now())).total_seconds()))
-    hours, rem = divmod(total, 3600)
-    minutes = rem // 60
-    if hours:
-        return f"{hours} ч {minutes} мин"
-    return f"{minutes} мин"
-
-
-def previous_day(day: str) -> str:
-    return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
-
-
-def format_day(day: str) -> str:
-    return date.fromisoformat(day).strftime("%d.%m.%Y")
-
-
-def ru_days(n: int) -> str:
-    mod10 = n % 10
-    mod100 = n % 100
-    if mod10 == 1 and mod100 != 11:
-        return f"{n} день"
-    if 2 <= mod10 <= 4 and (mod100 < 12 or mod100 > 14):
-        return f"{n} дня"
-    return f"{n} дней"
-
-
-def play_custom_id(day: str) -> str:
-    return f"{PLAY_ID}:{day}"
-
-
-def iter_custom_ids(components) -> list[str]:
-    found: list[str] = []
-    for item in components or []:
-        custom_id = getattr(item, "custom_id", None)
-        if custom_id:
-            found.append(str(custom_id))
-        found.extend(iter_custom_ids(getattr(item, "children", None)))
-    return found
-
-
-def first_text_display(components) -> str:
-    for item in components or []:
-        content = getattr(item, "content", None)
-        kind = getattr(getattr(item, "type", None), "name", "") or ""
-        if content and kind == "text_display":
-            return str(content)
-        nested = first_text_display(getattr(item, "children", None))
-        if nested:
-            return nested
-    return ""
-
-
-def play_id_day(custom_id: str | None) -> str | None:
-    if not custom_id:
-        return None
-    prefix = f"{PLAY_ID}:"
-    if custom_id.startswith(prefix):
-        day = custom_id[len(prefix) :]
-        return day or None
-    if custom_id == PLAY_ID:
-        return None
-    return None
-
-
-def merge_mode(old: dict | None, new: dict | None) -> dict:
-    old = old or {}
-    new = new or {}
-    done = bool(old.get("done") or new.get("done"))
-    attempts = max(int(old.get("attempts") or 0), int(new.get("attempts") or 0))
-    cells_old = list(old.get("cells") or [])
-    cells_new = list(new.get("cells") or [])
-    cells = cells_new if len(cells_new) >= len(cells_old) else cells_old
-    return {"attempts": max(attempts, 1) if done else attempts, "done": done, "cells": cells}
-
-
-def merge_player(old: dict | None, new: dict | None) -> dict:
-    old = old or {}
-    new = new or {}
-    old_progress = old.get("progress") or {}
-    new_progress = new.get("progress") or {}
-    return {
-        **old,
-        **new,
-        "name": new.get("name") or old.get("name"),
-        "avatar": new.get("avatar") if new.get("avatar") is not None else old.get("avatar"),
-        "progress": {mode: merge_mode(old_progress.get(mode), new_progress.get(mode)) for mode in MODES},
-    }
-
-
-def player_wins(player: dict | None) -> int:
-    progress = (player or {}).get("progress") or {}
-    return sum(1 for mode in MODES if (progress.get(mode) or {}).get("done"))
-
-
-def player_has_progress(player: dict | None) -> bool:
-    progress = (player or {}).get("progress") or {}
-    return any(
-        (progress.get(mode) or {}).get("done") or int((progress.get(mode) or {}).get("attempts") or 0)
-        for mode in MODES
-    )
-
-
-def day_has_win(record: dict | None) -> bool:
-    return any(player_wins(item) for item in (record or {}).get("players") or [])
-
-
-def apply_player_update(old: dict | None, new: dict | None, today: str) -> dict | None:
-    incoming = new or {}
-    if incoming.get("day") != today:
-        return None
-    if old and old.get("day") == today:
-        merged = merge_player(old, incoming)
-        merged["day"] = today
-        return merged
-    progress = incoming.get("progress") or {}
-    return {
-        **incoming,
-        "day": today,
-        "progress": {mode: merge_mode(None, progress.get(mode)) for mode in MODES},
-    }
-
-
-def coerce_channel_id(raw) -> int | None:
-    if raw in (None, "", 0, "0", "null", "undefined"):
-        return None
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return value or None
-
-
-def parse_instance_channel(instance_id: str | None) -> int | None:
-    if not instance_id:
-        return None
-    text = str(instance_id)
-    match = re.search(r"(?:^|-)gc-\d+-(\d+)$", text) or re.search(r"(?:^|-)pc-(\d+)$", text)
-    return int(match.group(1)) if match else None
-
-
-def resolve_channel_id(
-    player: dict,
-    instance_id: str,
-    instances: dict[str, int],
-    user_channels: dict[str, int],
-    stored_user_channel: int | None = None,
-) -> int | None:
-    user_id = str(player.get("id") or "")
-    for candidate in (
-        coerce_channel_id(player.get("channelId")),
-        parse_instance_channel(player.get("locationId")),
-        instances.get(instance_id),
-        parse_instance_channel(instance_id),
-        parse_instance_channel(player.get("instanceId")),
-        user_channels.get(user_id),
-        stored_user_channel,
-    ):
-        if candidate:
-            return int(candidate)
-    return None
-
-
-def session_is_live(*, has_sockets: bool, opened: bool, seen_at: float, now: float, grace: float) -> bool:
-    if has_sockets:
-        return True
-    if not opened:
-        return False
-    return now - seen_at < grace
-
-
-def message_id(raw) -> int | None:
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return None
-    return value or None
+# ponytail: окно вместо версий у пейлоада — клиент узнаёт о сбросе из бродкаста, но его
+# снапшот может уже лететь к нам. Понадобится точнее — нумеровать снапшоты на клиенте.
+RESET_GRACE = 5.0
 
 
 def _empty_day() -> dict:
@@ -247,6 +58,7 @@ class LoldleStore:
         self.path = path
         self.clock = clock or loldle_now
         self.data = {"channels": {}, "users": {}}
+        self._resets: dict[tuple[int, str], datetime] = {}
         self._lock = Lock()
         self.load()
 
@@ -302,20 +114,28 @@ class LoldleStore:
                     items.append((int(channel_id), state))
             return items
 
-    def user_channel(self, user_id: str) -> int | None:
+    def user_channel(self, user_id: str, now: datetime | None = None) -> int | None:
+        """Последний известный канал игрока — только если он известен с сегодня.
+
+        Вчерашняя память отправляла прогресс в канал, где человек сегодня не играл.
+        """
+        today = loldle_day(self._now(now))
         with self._lock:
             raw = (self.data.get("users") or {}).get(str(user_id)) or {}
-            return coerce_channel_id(raw.get("channel_id") if isinstance(raw, dict) else raw)
+            if not isinstance(raw, dict) or raw.get("day") != today:
+                return None
+            return coerce_channel_id(raw.get("channel_id"))
 
-    def remember_user_channel(self, user_id: str, channel_id: int) -> None:
+    def remember_user_channel(self, user_id: str, channel_id: int, now: datetime | None = None) -> None:
         key = str(user_id)
+        today = loldle_day(self._now(now))
         with self._lock:
             users = self.data.setdefault("users", {})
             prev = users.get(key) or {}
-            current = prev.get("channel_id") if isinstance(prev, dict) else prev
-            if coerce_channel_id(current) == int(channel_id):
-                return
-            users[key] = {"channel_id": int(channel_id)}
+            if isinstance(prev, dict) and prev.get("day") == today:
+                if coerce_channel_id(prev.get("channel_id")) == int(channel_id):
+                    return
+            users[key] = {"channel_id": int(channel_id), "day": today}
             self.save()
 
     def day_record(self, channel_id: int, day: str, *, create: bool = False, now: datetime | None = None) -> dict | None:
@@ -406,23 +226,43 @@ class LoldleStore:
         with self._lock:
             return self._upsert_player(channel_id, player, today, now)
 
+    def _target_day(self, channel_id: int, player: dict, today: str, now: datetime | None) -> str | None:
+        """День, в который ложится пейлоад, или None — если это хлам.
+
+        Клиент штампует день сам, и пока пейлоад летит, в Париже может наступить полночь.
+        Такой пейлоад кладём в его собственный вчерашний день, но только если игрок там уже
+        есть — иначе это просто протухший localStorage, и в сегодня ему точно нельзя.
+        """
+        claimed = str(player.get("day") or "")
+        if claimed == today:
+            return today
+        if claimed != previous_day(today):
+            return None
+        record = self._day_record(channel_id, claimed, create=False, now=now)
+        user_id = str(player.get("id") or "")
+        played = any(str(item.get("id") or "") == user_id for item in (record or {}).get("players") or [])
+        return claimed if played else None
+
     def _upsert_player(self, channel_id: int, player: dict, today: str, now: datetime | None) -> dict | None:
         user_id = str(player.get("id") or "")
         if not user_id:
             return None
-        if apply_player_update(None, player, today) is None:
+        day = self._target_day(channel_id, player, today, now)
+        if day is None:
             return None
-        record = self._day_record(channel_id, today, create=False, now=now)
+        if self._just_reset(channel_id, user_id, now):
+            return None
+        record = self._day_record(channel_id, day, create=False, now=now)
         people = list((record or {}).get("players") or [])
         existing = next((item for item in people if str(item.get("id") or "") == user_id), None)
-        merged = apply_player_update(existing, player, today)
+        merged = apply_player_update(existing, player, day)
         if merged is None:
             return None
         merged["id"] = user_id
-        merged["day"] = today
+        merged["day"] = day
         if existing is None and not player_has_progress(merged):
             return None
-        record = self._day_record(channel_id, today, create=True, now=now)
+        record = self._day_record(channel_id, day, create=True, now=now)
         assert record is not None
         people = list(record.get("players") or [])
         if existing is None:
@@ -438,9 +278,13 @@ class LoldleStore:
                 record["starters"] = starters
         except ValueError:
             pass
-        if player_wins(merged):
-            self._mark_played(channel_id, today, now)
+        if not player_wins(merged):
+            self.save()
+        elif day == today:
+            self._mark_played(channel_id, day, now)
         else:
+            # победа доехала в прошлый день — инкрементальный стрик её не увидит
+            self._recompute_streak(self._channel(channel_id, now), today)
             self.save()
         return merged
 
@@ -474,6 +318,7 @@ class LoldleStore:
                     }
                 )
             self._recompute_streak(state, today)
+            self._resets[(int(channel_id), uid)] = self._now(now)
             self.save()
             return affected
 
@@ -503,7 +348,7 @@ class LoldleStore:
 
     def _mark_played(self, channel_id: int, today: str, now: datetime | None) -> None:
         state = self._channel(channel_id, now)
-        if state.get("last_played_day") == today:
+        if str(state.get("last_played_day") or "") >= today:
             self.save()
             return
         yesterday = previous_day(today)
@@ -513,6 +358,16 @@ class LoldleStore:
             state["streak"] = 1
         state["last_played_day"] = today
         self.save()
+
+    def _just_reset(self, channel_id: int, user_id: str, now: datetime | None) -> bool:
+        """Клиент сбросил статистику — его же снапшот, летевший в этот момент, не воскрешает её."""
+        at = self._resets.get((int(channel_id), str(user_id)))
+        if at is None:
+            return False
+        if (self._now(now) - at).total_seconds() < RESET_GRACE:
+            return True
+        self._resets.pop((int(channel_id), str(user_id)), None)
+        return False
 
     def player(self, channel_id: int, user_id: str, now: datetime | None = None) -> dict | None:
         today = loldle_day(self._now(now))

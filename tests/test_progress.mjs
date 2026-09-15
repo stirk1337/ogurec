@@ -4,10 +4,10 @@ import {dirname, join} from "node:path";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
 
-import {mergeMode, modalWinAttempts, modeSnapshot} from "../ogurec/activity/client/progress.js";
+import {mergeMode, modalWinAttempts, modeSnapshot} from "../ogurec/loldle/client/progress.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const src = readFileSync(join(root, "ogurec/activity/client/src.js"), "utf8");
+const src = readFileSync(join(root, "ogurec/loldle/client/src.js"), "utf8");
 
 test("win screen nodes must stay in the DOM so Vue keeps today's answer", () => {
   assert.doesNotMatch(
@@ -33,11 +33,25 @@ test("first-try win modal counts as 1 done classic", () => {
   assert.equal(won.attempts, 1);
 });
 
-test("classic green row counts as win without Vue", () => {
+test("classic green row counts as win once today's answer is loaded", () => {
   const cells = [[{k: "g"}, {k: "g"}, {k: "g"}, {k: "g"}, {k: "g"}, {k: "g"}]];
-  const won = modeSnapshot({mode: "classic", pathMode: "classic", cells});
+  const won = modeSnapshot({mode: "classic", pathMode: "classic", modeReady: true, cells});
   assert.equal(won.done, true);
   assert.equal(won.attempts, 1);
+});
+
+test("yesterday's leftover storage is not today's progress on the mode page", () => {
+  const stale = modeSnapshot({
+    mode: "classic",
+    pathMode: "classic",
+    modeReady: false,
+    seenReady: false,
+    answer: "Ahri",
+    answers: ["Annie", "Ahri"],
+    cells: [[{k: "g"}, {k: "g"}, {k: "g"}, {k: "g"}, {k: "g"}, {k: "g"}]],
+  });
+  assert.equal(stale.done, false);
+  assert.equal(stale.attempts, 0);
 });
 
 test("after the win screen unmounts, storage plus seenReady still counts as done", () => {

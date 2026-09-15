@@ -9,6 +9,13 @@ export function isResetAck(raw, userId) {
   }
 }
 
+/** Сброс прилетает бродкастом: другие вкладки того же игрока держат свой localStorage
+ * и без этого зальют статистику обратно первым же хартбитом. */
+export function shouldWipeOnReset(state, userId, resetting) {
+  if (resetting || !userId) return false;
+  return state?.type === "reset" && String(state.id) === String(userId);
+}
+
 export function resetPayload({id, channelId, instanceId, day}) {
   return {
     type: "reset",

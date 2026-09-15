@@ -4,18 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from ogurec.activity.loldle_store import (
-    LoldleStore,
-    apply_player_update,
-    loldle_day,
-    merge_player,
-    parse_instance_channel,
-    play_custom_id,
-    play_id_day,
-    player_wins,
-    previous_day,
-    resolve_channel_id,
-)
+from ogurec.loldle.day import loldle_day, previous_day
+from ogurec.loldle.ids import parse_instance_channel, play_custom_id, play_id_day, resolve_channel_id
+from ogurec.loldle.rules import apply_player_update, merge_player, player_wins
+from ogurec.loldle.store import LoldleStore
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -69,6 +61,66 @@ class LoldleStoreTests(unittest.TestCase):
         self.assertFalse(today_record["players"][0]["progress"]["classic"]["done"])
         self.assertEqual(len(self.store.today_players(10)), 1)
         self.assertFalse(self.store.today_players(10)[0]["progress"]["classic"]["done"])
+
+    def test_win_sent_before_midnight_is_not_lost_after_rollover(self):
+        """Пейлоад летит секунды: клиент снял день до полуночи, сервер принял после."""
+        self.store.upsert_player(10, player("1", day="2026-09-08", done=False))
+        self.now = at("2026-09-09", 0)
+        stored = self.store.upsert_player(10, player("1", day="2026-09-08", done=True))
+        self.assertIsNotNone(stored)
+        yesterday = self.store.day_record(10, "2026-09-08")
+        self.assertTrue(yesterday["players"][0]["progress"]["classic"]["done"])
+        self.assertEqual(self.store.today_players(10), [])
+
+    def test_stale_day_from_a_player_who_did_not_play_is_ignored(self):
+        self.now = at("2026-09-09", 0)
+        self.assertIsNone(self.store.upsert_player(10, player("1", day="2026-09-08", done=True)))
+        self.assertIsNone(self.store.day_record(10, "2026-09-08"))
+        self.assertEqual(self.store.today_players(10), [])
+
+    def test_payload_older_than_yesterday_is_ignored(self):
+        self.store.upsert_player(10, player("1", day="2026-09-08", done=True))
+        self.now = at("2026-09-10", 0)
+        self.assertIsNone(self.store.upsert_player(10, player("1", day="2026-09-08", done=True)))
+        self.assertEqual(self.store.today_players(10), [])
+
+    def test_late_yesterday_win_does_not_move_the_streak_back(self):
+        self.store.upsert_player(10, player("1", day="2026-09-08", done=True))
+        self.now = at("2026-09-09", 0)
+        self.store.upsert_player(10, player("2", day="2026-09-09", done=True))
+        self.assertEqual(self.store.channel(10)["last_played_day"], "2026-09-09")
+        self.store.upsert_player(10, player("1", day="2026-09-08", done=True))
+        self.assertEqual(self.store.channel(10)["last_played_day"], "2026-09-09")
+        self.assertEqual(self.store.channel(10)["streak"], 2)
+
+    def test_reset_is_not_undone_by_a_client_still_publishing(self):
+        """Второе устройство держит старый снапшот и шлёт его дальше — сброс должен выстоять."""
+        self.now = at("2026-09-09")
+        self.store.upsert_player(10, player("1", day="2026-09-09", done=True))
+        self.store.remove_player(10, "1")
+        self.assertIsNone(self.store.upsert_player(10, player("1", day="2026-09-09", done=True)))
+        self.assertEqual(self.store.today_players(10), [])
+
+    def test_reset_does_not_block_playing_again_later(self):
+        self.now = at("2026-09-09", 12)
+        self.store.upsert_player(10, player("1", day="2026-09-09", done=True))
+        self.store.remove_player(10, "1")
+        self.now = at("2026-09-09", 13)
+        self.assertIsNotNone(self.store.upsert_player(10, player("1", day="2026-09-09", done=True)))
+        self.assertEqual(len(self.store.today_players(10)), 1)
+
+    def test_channel_memory_expires_with_the_day(self):
+        """Вчерашний канал — не подсказка: прогресс уедет туда, где человек сегодня не играл."""
+        self.store.remember_user_channel("1", 10)
+        self.assertEqual(self.store.user_channel("1"), 10)
+        self.now = at("2026-09-09")
+        self.assertIsNone(self.store.user_channel("1"))
+        self.store.remember_user_channel("1", 20)
+        self.assertEqual(self.store.user_channel("1"), 20)
+
+    def test_legacy_channel_memory_without_day_is_not_trusted(self):
+        self.store.data["users"]["1"] = {"channel_id": 10}
+        self.assertIsNone(self.store.user_channel("1"))
 
     def test_second_device_done_overwrites_yellow(self):
         self.now = at("2026-09-09")
@@ -253,7 +305,7 @@ class HelperTests(unittest.TestCase):
     def test_iter_custom_ids_walks_nested_rows(self):
         from types import SimpleNamespace
 
-        from ogurec.activity.loldle_store import first_text_display, iter_custom_ids
+        from ogurec.loldle.ids import iter_custom_ids
 
         nested = SimpleNamespace(
             custom_id=None,
@@ -266,7 +318,6 @@ class HelperTests(unittest.TestCase):
             ],
         )
         self.assertEqual(iter_custom_ids([nested]), ["loldle:play:2026-09-09"])
-        self.assertEqual(first_text_display([nested]), "stirk играет")
 
     def test_player_wins(self):
         self.assertEqual(player_wins(player("1", day="2026-09-08", done=True)), 1)
@@ -304,7 +355,7 @@ class ScoreboardTests(unittest.TestCase):
     def test_title_and_recap_render(self):
         from PIL import Image
 
-        from ogurec.activity.scoreboard import render_scoreboard
+        from ogurec.loldle.scoreboard import render_scoreboard
 
         with_timer = render_scoreboard([], title="LoLdle · 09.09.2026", remaining=True)
         recap = render_scoreboard([], title="Итоги · 08.09.2026", remaining=False)
@@ -319,6 +370,34 @@ class ScoreboardTests(unittest.TestCase):
         self.assertGreaterEqual(Image.open(with_timer).width, 800)
         stripe = Image.open(filled).getpixel((0, Image.open(filled).height // 2))
         self.assertEqual(stripe[:3], (200, 170, 110))
+
+
+class CaptionTests(unittest.TestCase):
+    def test_status_lists_everyone_and_crowns_the_leader(self):
+        from ogurec.loldle.captions import caption
+
+        text = caption(
+            [player("1", day="2026-09-08", done=True, name="A"), player("2", day="2026-09-08", done=False, name="B")],
+            {1},
+            3,
+            status=True,
+        )
+        self.assertIn("🔥 Стрик сервера: 3 дня", text)
+        self.assertIn("👑 **1/5** — A", text)
+        self.assertIn("**0/5** — B", text)
+        self.assertNotIn("<@", text)
+
+    def test_recap_pings_starters_and_reports_broken_streak(self):
+        from ogurec.loldle.captions import caption
+
+        text = caption([player("1", day="2026-09-08", done=False, name="A")], {1}, 0, recap=True)
+        self.assertIn("<@1>", text)
+        self.assertIn("Стрик сброшен", text)
+
+    def test_empty_day_asks_to_play(self):
+        from ogurec.loldle.captions import caption
+
+        self.assertIn("нажми Играть", caption([], set(), 0, status=True))
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ import {
   enterGuessIsCorrect,
   normalizeChampion,
   textMatchesChampion,
-} from "../ogurec/activity/client/guess.js";
+} from "../ogurec/loldle/client/guess.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -29,7 +29,7 @@ test("Enter is a win only for the exact or highlighted answer, not a prefix", ()
 });
 
 test("haptic overlay must not cover guess rows", () => {
-  const src = readFileSync(join(root, "ogurec/activity/client/src.js"), "utf8");
+  const src = readFileSync(join(root, "ogurec/loldle/client/src.js"), "utf8");
   assert.equal(
     src.includes("data-ogurec-haptic"),
     false,

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-from ogurec.activity.loldle_store import format_until_next
+from ogurec.loldle.day import format_until_next
 
 MODES = (
     ("classic", "К"),

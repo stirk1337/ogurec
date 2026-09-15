@@ -4,10 +4,10 @@ import {dirname, join} from "node:path";
 import {fileURLToPath} from "node:url";
 import test from "node:test";
 
-import {createResetSession, isResetAck, resetPayload, storageKeysToClear} from "../ogurec/activity/client/reset.js";
+import {createResetSession, isResetAck, resetPayload, shouldWipeOnReset, storageKeysToClear} from "../ogurec/loldle/client/reset.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const src = readFileSync(join(root, "ogurec/activity/client/src.js"), "utf8");
+const src = readFileSync(join(root, "ogurec/loldle/client/src.js"), "utf8");
 
 test("Discord Activity blocks window.confirm, so reset must use an in-app confirm", () => {
   const discordConfirm = () => false;
@@ -57,4 +57,17 @@ test("reset must not wipe Discord SDK / LoLdle boot storage", () => {
     "discord_sdk",
   ]);
   assert.deepEqual(kept.sort(), ["classic_answers", "ogurecProgress", "ogurecWon", "quote_today_answer"]);
+});
+
+test("reset broadcast wipes every other client of the same user", () => {
+  assert.equal(shouldWipeOnReset({type: "reset", id: "7"}, "7", false), true, "second device must wipe too");
+  assert.equal(shouldWipeOnReset({type: "reset", id: "7"}, "7", true), false, "the device doing the reset reloads itself");
+  assert.equal(shouldWipeOnReset({type: "reset", id: "8"}, "7", false), false, "someone else's reset is not mine");
+  assert.equal(shouldWipeOnReset({id: "7"}, "7", false), false, "plain progress is not a reset");
+  assert.equal(shouldWipeOnReset({type: "reset", id: "7"}, "", false), false, "unknown user must not wipe");
+  assert.match(
+    src,
+    /shouldWipeOnReset\(state, user\.id, resetting\)[\s\S]{0,120}location\.reload\(\)/,
+    "onSocketMessage must wipe and reload, otherwise the peer republishes the stats it just lost",
+  );
 });

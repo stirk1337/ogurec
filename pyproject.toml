@@ -20,7 +20,7 @@ package = true
 
 [tool.setuptools.packages.find]
 include = ["ogurec*"]
-exclude = ["ogurec.activity.client.node_modules*"]
+exclude = ["ogurec.loldle.client.node_modules*"]
 
 [tool.ruff]
 line-length = 120

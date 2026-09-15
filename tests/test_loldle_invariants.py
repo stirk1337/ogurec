@@ -5,13 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from ogurec.activity.loldle_store import (
-    LoldleStore,
-    message_id,
-    resolve_channel_id,
-)
-from ogurec.activity.server import ActivityServer
-
+from ogurec.loldle.ids import message_id, resolve_channel_id
+from ogurec.loldle.server import ActivityServer
+from ogurec.loldle.store import LoldleStore
 from tests.test_loldle_store import at, player
 
 
@@ -76,7 +72,7 @@ class StoreInvariantTests(unittest.TestCase):
         import discord
         from discord.http import handle_message_parameters
 
-        from ogurec.cogs.loldle_cog import LoldleView
+        from ogurec.loldle.view import LoldleView
 
         view = LoldleView("2026-09-09")
         self.assertFalse(
@@ -100,46 +96,46 @@ class StoreInvariantTests(unittest.TestCase):
         self.assertNotIn("followup.send", show)
 
     def test_replace_board_sends_before_deleting(self):
-        cog = Path("ogurec/cogs/loldle_cog.py").read_text()
-        fn = cog.split("async def _replace_board", 1)[1].split("def _caption", 1)[0]
-        self.assertLess(fn.find("_send_board"), fn.find("message.delete"))
+        board = Path("ogurec/loldle/board.py").read_text()
+        fn = board.split("async def replace", 1)[1].split("async def today", 1)[0]
+        self.assertLess(fn.find("self.send"), fn.find("message.delete"))
 
     def test_today_board_lookup_does_not_delete(self):
         cog = Path("ogurec/cogs/loldle_cog.py").read_text()
-        fn = cog.split("async def _today_board", 1)[1].split("def _is_components_v2", 1)[0]
+        board = Path("ogurec/loldle/board.py").read_text()
+        fn = board.split("async def today", 1)[1].split("def is_components_v2", 1)[0]
         self.assertNotIn("delete", fn)
-        self.assertNotIn("_drop_board", fn)
         touch = cog.split("async def touch_session", 1)[1].split("async def show_today", 1)[0]
         self.assertIn("_schedule_publish", touch)
         self.assertNotIn("await self._publish(channel)", touch)
 
     def test_v2_scoreboard_is_not_editable_today_board(self):
-        from ogurec.cogs.loldle_cog import Loldle
+        from ogurec.loldle.board import Boards
 
-        cog = Loldle.__new__(Loldle)
-        cog.bot = SimpleNamespace(user=SimpleNamespace(id=42))
+        boards = Boards.__new__(Boards)
+        boards.bot = SimpleNamespace(user=SimpleNamespace(id=42))
         message = SimpleNamespace(
             author=SimpleNamespace(id=42),
             flags=SimpleNamespace(components_v2=True),
             components=[SimpleNamespace(custom_id="loldle:play:2026-09-09", children=[])],
         )
-        self.assertFalse(cog._is_today_board(message, "2026-09-09"))
+        self.assertFalse(boards.is_today_board(message, "2026-09-09"))
 
     def test_static_play_id_is_today_board(self):
-        from ogurec.cogs.loldle_cog import Loldle
+        from ogurec.loldle.board import Boards
 
-        cog = Loldle.__new__(Loldle)
-        cog.bot = SimpleNamespace(user=SimpleNamespace(id=42))
+        boards = Boards.__new__(Boards)
+        boards.bot = SimpleNamespace(user=SimpleNamespace(id=42))
         message = SimpleNamespace(
             author=SimpleNamespace(id=42),
             flags=SimpleNamespace(components_v2=False),
             components=[SimpleNamespace(custom_id="loldle:play", children=[])],
         )
-        self.assertTrue(cog._is_today_board(message, "2026-09-09"))
+        self.assertTrue(boards.is_today_board(message, "2026-09-09"))
 
     def test_play_button_uses_persistent_static_id(self):
-        from ogurec.activity.loldle_store import PLAY_ID
-        from ogurec.cogs.loldle_cog import LoldleView
+        from ogurec.loldle.ids import PLAY_ID
+        from ogurec.loldle.view import LoldleView
 
         view = LoldleView("2026-09-09")
         self.assertTrue(view.is_persistent())
@@ -148,13 +144,13 @@ class StoreInvariantTests(unittest.TestCase):
             "async def cog_unload", 1
         )[0]
         self.assertIn("add_view(LoldleView())", load)
-        handle = Path("ogurec/cogs/loldle_cog.py").read_text().split("async def handle_play", 1)[1].split(
+        handle = Path("ogurec/loldle/view.py").read_text().split("async def handle_play", 1)[1].split(
             "class PlayButton", 1
         )[0]
         self.assertLess(handle.find("launch_activity"), handle.find("touch_session"))
 
     def test_play_logs_include_http_details(self):
-        from ogurec.cogs.loldle_cog import http_detail, play_ctx
+        from ogurec.loldle.diag import http_detail, play_ctx
 
         exc = SimpleNamespace(status=400, code=50035, text="Invalid Form Body")
         self.assertEqual(http_detail(exc), "status=400 code=50035 text='Invalid Form Body'")
@@ -173,9 +169,10 @@ class StoreInvariantTests(unittest.TestCase):
         self.assertIn("message=12", ctx)
         self.assertIn("custom_id=loldle:play", ctx)
         cog = Path("ogurec/cogs/loldle_cog.py").read_text()
+        view = Path("ogurec/loldle/view.py").read_text()
         self.assertIn('logger.info("loldle click {}"', cog)
-        self.assertIn('logger.info("loldle launch ok {}"', cog)
-        self.assertIn("loldle activity socket open", Path("ogurec/activity/server.py").read_text())
+        self.assertIn('logger.info("loldle launch ok {}"', view)
+        self.assertIn("loldle activity socket open", Path("ogurec/loldle/server.py").read_text())
 
     def test_day_recap_has_play_button_for_today(self):
         cog = Path("ogurec/cogs/loldle_cog.py").read_text()
@@ -232,10 +229,10 @@ class ActivityResetTests(unittest.IsolatedAsyncioTestCase):
         self.server.rooms["room"].add(peer)
         self.server.states["room"]["1"] = {"id": "1"}
         self.server.on_reset = AsyncMock(side_effect=RuntimeError("discord down"))
-        logger.disable("ogurec.activity.server")
+        logger.disable("ogurec.loldle.server")
         try:
             await self.server._publish("room", json.dumps({"type": "reset", "id": "1"}))
         finally:
-            logger.enable("ogurec.activity.server")
+            logger.enable("ogurec.loldle.server")
         self.assertNotIn("1", self.server.states["room"])
         self.assertEqual(json.loads(peer.sent[-1]), {"type": "reset", "id": "1"})

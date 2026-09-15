@@ -2,7 +2,7 @@ import {DiscordSDK} from "@discord/embedded-app-sdk";
 import CryptoJS from "crypto-js";
 import {clickGuessIsCorrect, enterGuessIsCorrect} from "./guess.js";
 import {mergeProgress, modalWinAttempts, modeSnapshot} from "./progress.js";
-import {createResetSession, isResetAck, resetPayload, storageKeysToClear} from "./reset.js";
+import {createResetSession, isResetAck, resetPayload, shouldWipeOnReset, storageKeysToClear} from "./reset.js";
 
 const modes = [
   ["classic", "Классика"],
@@ -853,6 +853,11 @@ function onSocketMessage(event) {
     if (user && state.id === user.id) {
       remoteProgress = {};
       remoteDay = "";
+      if (shouldWipeOnReset(state, user.id, resetting)) {
+        clearBrowserData();
+        location.reload();
+        return;
+      }
     }
     render();
     return;

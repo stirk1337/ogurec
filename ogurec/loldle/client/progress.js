@@ -15,8 +15,11 @@ export function modalWinAttempts(text) {
   return match ? Number(match[1]) : 1;
 }
 
-export function canTrustLocalPuzzle({mode, pathMode, modeReady, seenReady, cells}) {
-  return Boolean(modeReady || seenReady || pathMode === mode || (mode === "classic" && cells?.length));
+/** LoLdle wipes `<mode>_answers` only after the mode page refetches today's champion, so before
+ * that the storage still holds yesterday's guesses. Only Vue confirming today's answer proves the
+ * local puzzle is current; the route alone does not. */
+export function canTrustLocalPuzzle({modeReady, seenReady}) {
+  return Boolean(modeReady || seenReady);
 }
 
 export function answersIncludeChampion(answers, answer) {
