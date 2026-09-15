@@ -96,29 +96,15 @@ class ActivityStorage:
 
         logger.info(f"Перед удалением активности: {before[0]}, после удаления активности: {after[0]}")
 
-    async def activity_info(self):
+    async def activity_totals(self) -> list[tuple[int, str, int, int]]:
+        """Сумма по (пользователь, игра): (user_id, game, секунды, заходов). Считает sql, не LLM."""
         async with self.conn.execute(
             """
-            SELECT
-                user_id,
-                game,
-                started_at,
-                ended_at,
-                duration
+            SELECT user_id, game, SUM(duration), COUNT(*)
             FROM activity
-            ORDER BY started_at
+            WHERE duration IS NOT NULL AND duration > 0
+            GROUP BY user_id, game
+            ORDER BY user_id, SUM(duration) DESC
             """
         ) as cursor:
-            rows = await cursor.fetchall()
-
-        content = ""
-
-        for user_id, game, started_at, ended_at, duration in rows:
-            content += (
-                f"Пользователь {user_id} играл в {game}. "
-                f"Начал: {started_at}. "
-                f"Закончил: {ended_at}. "
-                f"Длительность: {duration} сек.\n"
-            )
-
-        return content
+            return list(await cursor.fetchall())

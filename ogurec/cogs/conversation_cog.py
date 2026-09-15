@@ -1,4 +1,5 @@
 import asyncio
+import json
 import random
 from datetime import datetime, timedelta, time
 from typing import Any
@@ -16,21 +17,37 @@ from ogurec.chatgpt import GPTClient, RateLimitError
 from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
 from ogurec.cogs.gif_storage_cog import GifStorage
 from ogurec.config.settings import Settings
+from ogurec.decision import decide_action
+from ogurec.memory import UserMemory
 from ogurec.search import SearchService
 from ogurec.utils import TIME_ZONE, fix_discord_format, get_random_sticker
 
-MESSAGE_RANDOM_RANGE = 450
-REACTION_RANDOM_RANGE = 650
-MESSAGE_GUARANTEE_LIMIT = 750
-HISTORY_TIMEOUT_MINUTES = 10
+GIF_RANDOM_RANGE = 600
+# история живет дольше тишины, после которой бот пишет сам (proactive_silence_minutes)
+HISTORY_TIMEOUT_MINUTES = 60
 
 BOT_MOODS = [
-    "Пиши как гопник",
-    "Пиши с жестким негативом",
-    "Пиши как гопник с жестким негативом",
-    "Пиши с негативом",
-    "Пиши как агресивный гопник",
+    "сегодня ты злой и цепляешься к словам",
+    "сегодня ты ленивый, отвечаешь коротко и нехотя",
+    "сегодня ты в духе, подъебываешь по-доброму",
+    "сегодня ты гопник, разговариваешь свысока",
+    "сегодня тебе на всех насрать, отвечаешь сухо",
 ]
+
+# примеры вместо списка запретов: стиль модель считывает с них лучше
+STYLE_EXAMPLES = """Примеры того, как ты пишешь:
+Егор: кто в доту?
+Ты: зашел бы, но после твоего прошлого мида я лучше посплю
+
+Слава: народ, комп не включается
+Ты: в розетку воткни, гений
+
+Рома: я сегодня 6 часов в алане просидел
+Ты: шесть часов и фонарик так и не нашел?
+
+Стирк: го катку
+Ты: го, только не ной потом"""
+
 
 class ConversationCog(commands.Cog):
     def __init__(
@@ -41,9 +58,9 @@ class ConversationCog(commands.Cog):
         settings: Settings,
         activity_storage: ActivityStorage,
         search_service: SearchService | None = None,
+        memory: UserMemory | None = None,
     ):
         self.bot = bot
-        self.message_counter = 0
         self.gpt_client = gpt_client
 
         self.settings = settings
@@ -58,9 +75,31 @@ class ConversationCog(commands.Cog):
         self.gif_storage = gif_storage
 
         self.channel_locks = defaultdict(asyncio.Lock)
+        self.memory = memory
+
+        # сообщения копятся пачкой, бот отвечает один раз на всю пачку
+        self.pending: dict[int, list[Message]] = defaultdict(list)
+        self.batch_tasks: dict[int, asyncio.Task] = {}
+        self.batch_busy: set[int] = set()
+        # время последних ответов на канал — для потолка ответов в минуту
+        self.reply_times: dict[int, list[datetime]] = defaultdict(list)
+
+        # настроение держится часами, а не выбирается заново на каждый ответ
+        self.mood: str = random.choice(BOT_MOODS)
+        self.mood_until: datetime = datetime.now() + timedelta(hours=settings.mood_hours)
 
         self.last_report_date = None
         self.generate_report.start()
+        self.proactive_loop.start()
+
+    def _current_mood(self) -> str:
+        """Настроение живет несколько часов, а не меняется от сообщения к сообщению."""
+        now = datetime.now()
+        if now >= self.mood_until:
+            self.mood = random.choice(BOT_MOODS)
+            self.mood_until = now + timedelta(hours=self.settings.mood_hours)
+            logger.info(f"Настроение сменилось: {self.mood} (до {self.mood_until:%H:%M})")
+        return self.mood
 
     @staticmethod
     def _roll(*values: int, max_value: int) -> bool:
@@ -80,29 +119,25 @@ class ConversationCog(commands.Cog):
 
                 await self.gif_storage.add(url)
 
-    def _get_base_system_message(self, include_mood: bool = False, guild_name: str = None) -> dict:
-        """Базовое системное сообщение, которое всегда должно быть в начале истории."""
-
-
+    def _get_base_system_message(self, include_mood: bool = True, guild_name: str = None) -> dict:
+        """Базовое системное сообщение: характер и примеры вместо списка запретов."""
         now = dt.now(TIME_ZONE)
-        current_date = now.strftime("%d.%m.%Y %H:%M")
 
-        content = "Ты Discord бот по имени Ogurec. Ты пишешь от 1 до 10 предложений за 1 ответ."
-        content += f"Текущая дата и время: {current_date}. "
-
-        content += f"Название сервера: {guild_name}. "
+        content = (
+            "Ты Ogurec — участник этого Discord чата, а не ассистент. "
+            "Пишешь как человек в чате: 1-3 предложения, без списков, заголовков и таблиц, "
+            "без вежливых формул и предложений помочь. Токсишь и подъебываешь, но по делу. "
+            "Не пересказываешь то, что и так видно в чате, и не объясняешь свои шутки.\n"
+            f"{STYLE_EXAMPLES}\n"
+        )
+        content += f"Сейчас {now:%d.%m.%Y %H:%M}, сервер называется {guild_name}. "
+        content += "Это справка — не пересказывай ее без повода. "
 
         if self.current_game:
-            content += f"Сейчас ты играешь в: {self.current_game}. "
-
-        content += (
-            "Название сервера, дата и время выше — справочно; не пересказывай их и не вставляй в ответ "
-            "без запроса или без явной нужды по смыслу (время, название сервера, «мы тут на сервере» и т.п.)."
-        )
+            content += f"Ты сейчас играешь в {self.current_game}. "
 
         if include_mood:
-            mood = random.choice(BOT_MOODS)
-            content += f" {mood}."
+            content += f"Твое настроение: {self._current_mood()}."
 
         return {"role": "system", "content": content}
 
@@ -136,6 +171,10 @@ class ConversationCog(commands.Cog):
                 info_parts.append(f"Кастомный статус: {activity.name}")
             elif isinstance(activity, discord.Spotify):
                 info_parts.append(f"Слушает трек Spotify: {activity.title} автора {activity.artist}")
+
+        facts = self.memory.facts(user.id) if self.memory else ""
+        if facts:
+            info_parts.append("Что ты про него помнишь: " + facts.replace("\n", "; "))
 
         return ". ".join(info_parts)
 
@@ -210,11 +249,8 @@ class ConversationCog(commands.Cog):
 
         # Добавляем базовое системное сообщение, если его нет
         if not has_base_system:
-            # 30% шанс выбрать случайное поведение
-            include_mood = random.randint(1, 100) <= 30
-            # Информация о сервере всегда передается (дата и название)
             guild_name = guild.name if guild else None
-            history.insert(0, self._get_base_system_message(include_mood=include_mood, guild_name=guild_name))
+            history.insert(0, self._get_base_system_message(guild_name=guild_name))
 
         # Добавляем системное сообщение с эмодзи, если это первое пользовательское сообщение
         if not has_emojis_system and guild and is_first_user_message:
@@ -225,7 +261,7 @@ class ConversationCog(commands.Cog):
                     (
                         i
                         for i, msg in enumerate(history)
-                        if msg.get("role") == "system" and "Ogurec Bot" in msg.get("content", "")
+                        if msg.get("role") == "system" and "Ogurec" in msg.get("content", "")
                     ),
                     len(history),
                 )
@@ -286,10 +322,7 @@ class ConversationCog(commands.Cog):
         self._add_assistant_message(channel_id, content)
 
     async def reply_with_gpt(self, message: Message, random_phrase: bool = False):
-        """
-        Создается очередь из всех сообщений, на которые должен овтетить бот. 
-        Бот не отвечает на 2 или более сообщения одновременно.
-        """
+        """Ответить на сообщение вне общей очереди пачек (ручной вызов)."""
         if message.author.bot or not message.content.strip():
             return
 
@@ -298,22 +331,87 @@ class ConversationCog(commands.Cog):
         async with self.channel_locks[channel_id]:
             await self._reply_with_gpt_locked(message, channel_id, random_phrase)
 
+    def _cooldown_ok(self, channel_id: int) -> bool:
+        """Не больше settings.replies_per_minute ответов в минуту на канал."""
+        now = datetime.now()
+        recent = [t for t in self.reply_times[channel_id] if now - t < timedelta(minutes=1)]
+        self.reply_times[channel_id] = recent
+        return len(recent) < self.settings.replies_per_minute
+
+    def _recent_lines(self, channel_id: int, limit: int = 12) -> list[str]:
+        """Последние реплики канала в виде 'кто: что' — вход для решения о реплике."""
+        lines = []
+        for msg in self._get_channel_history(channel_id)[-limit:]:
+            role = msg.get("role")
+            if role == "system":
+                continue
+            who = "Ogurec" if role == "assistant" else msg.get("name", "кто-то")
+            lines.append(f"{who}: {msg.get('content', '')[:200]}")
+        return lines
+
+    def _schedule_batch(self, channel_id: int):
+        """Перезапускает таймер: отвечаем, когда чат замолчал на reply_debounce_seconds."""
+        if channel_id in self.batch_busy:
+            return  # ответ уже готовится, новую пачку подхватим после него
+
+        task = self.batch_tasks.get(channel_id)
+        if task and not task.done():
+            task.cancel()
+        self.batch_tasks[channel_id] = asyncio.create_task(self._process_batch(channel_id))
+
+    async def _process_batch(self, channel_id: int):
+        """Ждет паузу в чате, потом решает: ответить, реакция или промолчать."""
+        try:
+            await asyncio.sleep(self.settings.reply_debounce_seconds)
+        except asyncio.CancelledError:
+            return  # пришло новое сообщение — пачка соберется заново
+
+        batch = self.pending.pop(channel_id, [])
+        if not batch:
+            return
+
+        self.batch_busy.add(channel_id)
+        try:
+            await self._handle_batch(channel_id, batch)
+        finally:
+            self.batch_busy.discard(channel_id)
+            if self.pending[channel_id]:
+                self._schedule_batch(channel_id)
+
+    async def _handle_batch(self, channel_id: int, batch: list[Message]):
+        last = batch[-1]
+        mentioned = any(self.bot.user.mentioned_in(m) for m in batch)
+
+        if mentioned:
+            action = "reply"
+        elif not self._cooldown_ok(channel_id):
+            logger.info(f"Потолок ответов в минуту, канал {channel_id}")
+            action = "react" if random.randint(1, 100) <= 30 else "skip"
+        else:
+            action = await decide_action(
+                self._recent_lines(channel_id), self.gpt_client, self.settings.fast_model
+            )
+
+        try:
+            if action == "reply":
+                self.reply_times[channel_id].append(datetime.now())
+                # пауза "он прочитал и печатает", чтобы ответ не прилетал мгновенно
+                await asyncio.sleep(random.uniform(0.5, self.settings.reply_delay_seconds))
+                async with self.channel_locks[channel_id]:
+                    await self._reply_with_gpt_locked(last, channel_id, random_phrase=not mentioned)
+            elif action == "react":
+                await self.add_random_reaction(last)
+        except Exception:
+            logger.exception("Не смог обработать пачку сообщений")
+
+        asyncio.create_task(self.send_random_gif(last))
+
     async def _reply_with_gpt_locked(self, message: Message, channel_id, random_phrase: bool):
         """
         Отвечает на сообщение пользователя через GPT с эффектом "печатает по частям".
         Запоминает историю разговора и сбрасывает её через час без активности.
         """
-        # Проверяем, будет ли это первое пользовательское сообщение (до добавления текущего)
-        history_before = self._get_channel_history(channel_id)
-        user_messages_count = sum(1 for msg in history_before if msg.get("role") == "user")
-        is_first_user_message = user_messages_count == 0
-
-        # Убеждаемся, что системные сообщения есть (включая эмодзи, если это первое сообщение)
-        self._ensure_system_messages(channel_id, message.guild, is_first_user_message)
-
-        # Добавить сообщение пользователя в историю
-        self._add_user_message(channel_id, message.content, message.author.name)
-
+        # сообщения уже в истории: их кладет on_message, когда они приходят
         has_user_mention = any(
             not u.bot and u.id != self.bot.user.id
             for u in getattr(message, "mentions", [])
@@ -345,7 +443,7 @@ class ConversationCog(commands.Cog):
         info_parts = []
         if random_phrase:
             info_parts.append(
-                f"Это сообщение предназначалось не тебе, так что не всопринимай эти сообщения на свой счёт. Изучи сообщение, на которое отвечаешь, и несколько сообщений до этого. Ты должен написать ответ по теме к этим сообщениям."
+                "К тебе не обращались — ты сам влезаешь в разговор. Ответь по теме последних сообщений, не принимай их на свой счет."
             )
         elif author_info:
             info_parts.append(
@@ -355,13 +453,10 @@ class ConversationCog(commands.Cog):
         if mentioned_users_info:
             info_parts.append(mentioned_users_info)
 
+        # Собираем messages для GPT: история + временный контекст (в историю не сохраняем)
+        messages_for_gpt = list(history)
         if info_parts:
-            combined_info_message = {"role": "user", "content": " ".join(info_parts), "name":message.author.name}
-            # Вставляем перед последним сообщением пользователя
-            history.insert(-1, combined_info_message)
-
-        # Собираем messages для GPT: история + временный контекст поиска (не сохраняем в историю)
-        messages_for_gpt = history
+            messages_for_gpt.append({"role": "system", "content": " ".join(info_parts)})
         if search_context:
             search_msg = {
                 "role": "system",
@@ -373,7 +468,7 @@ class ConversationCog(commands.Cog):
                     "Если твой овтет основан на данных поиска, то не пиши, что этот ответ сгенерирован на данных из поиска. Если ответа из поиска не нашлось, то отправь ссылку на ккакой-то из сайтов."
                 ),
             }
-            messages_for_gpt += [search_msg]
+            messages_for_gpt.append(search_msg)
         
         # Отправляем пустое сообщение-плейсхолдер с ответом на сообщение пользователя
         sent_message = await message.channel.send("💬 ...", reference=message)
@@ -413,20 +508,8 @@ class ConversationCog(commands.Cog):
             # На случай ошибки
             await sent_message.edit(content=f"Бро, ошибка при генерации ответа: {e}")
 
-    async def reply_to_question(self, message: Message) -> bool:
-        if self.bot.user.mentioned_in(message) and message.content and message.content[-1] in {"?", "!", "."}:
-            await self.reply_with_gpt(message)
-            return True
-        return False
-
-    async def send_random_phrase(self, message: Message) -> bool:
-        if self._roll(1, 2, max_value=MESSAGE_RANDOM_RANGE):
-            await self.reply_with_gpt(message, True)
-            return True
-        return False
-
     async def send_random_gif(self, message: Message) -> bool:
-        if not self._roll(1, 2, max_value=600):
+        if not self._roll(1, 2, max_value=GIF_RANDOM_RANGE):
             return False
 
         url = await self.gif_storage.random()
@@ -439,44 +522,12 @@ class ConversationCog(commands.Cog):
 
         return True
 
-    async def reply_to_ping(self, message: Message) -> bool:
-        if not self.bot.user.mentioned_in(message):
-            return False
-
-        if not message.guild:
-            return False
-
-        await self.reply_with_gpt(message)
-
-        return True
-
-    async def send_random_content(
-        self,
-        message: Message,
-        *,
-        emoji: bool,
-    ) -> bool:
-        trigger = self._roll(1, 2, max_value=MESSAGE_RANDOM_RANGE) or self.message_counter >= MESSAGE_GUARANTEE_LIMIT
-
-        if not trigger or self.bot.user.mentioned_in(message):
-            return False
-
-        if not message.guild:
-            return False
-
-        self.message_counter = 0
-        await self.reply_with_gpt(message)
-
-        return True
-
     async def add_random_reaction(self, message: Message):
         if not message.guild or not message.guild.emojis:
             return
 
-        value = random.randint(1, REACTION_RANDOM_RANGE)
-        if 3 <= value <= 10:
-            await asyncio.sleep(random.randint(1, 4))
-            await message.add_reaction(random.choice(message.guild.emojis))
+        await asyncio.sleep(random.randint(1, 4))
+        await message.add_reaction(random.choice(message.guild.emojis))
 
     def _remove_topmost_non_system_message(self, channel_id: int) -> bool:
         """
@@ -568,32 +619,131 @@ class ConversationCog(commands.Cog):
 
         await self.save_gifs(message)
 
-        # Обновить активность канала при любом сообщении (для сброса таймера)
-        if message.content and message.content.strip():
-            channel_id = message.channel.id
-            self._update_channel_activity(channel_id)
+        if not message.content or not message.content.strip():
+            return
 
-        handlers = (
-            self.reply_to_question,
-            self.send_random_phrase,
-            self.send_random_gif,
-            self.reply_to_ping,
-            lambda m: self.send_random_content(m, emoji=False),
-            lambda m: self.send_random_content(m, emoji=True),
-        )
+        channel_id = message.channel.id
 
-        for handler in handlers:
-            if await handler(message):
+        # бот читает чат всегда, даже когда молчит
+        history = self._get_channel_history(channel_id)
+        is_first_user_message = not any(msg.get("role") == "user" for msg in history)
+        self._ensure_system_messages(channel_id, message.guild, is_first_user_message)
+        self._add_user_message(channel_id, message.content, message.author.name)
+
+        if self.memory and self.memory.note_message(message.author.id, message.author.name, message.content):
+            asyncio.create_task(self.memory.update(message.author.id, message.author.name))
+
+        self.pending[channel_id].append(message)
+        self._schedule_batch(channel_id)
+
+    @tasks.loop(minutes=5)
+    async def proactive_loop(self):
+        """Бот сам пишет в замолчавший чат — по кубику, а не по расписанию."""
+        if not self.settings.proactive_enabled:
+            return
+
+        now = datetime.now()
+        silence = timedelta(minutes=self.settings.proactive_silence_minutes)
+
+        for channel_id, data in list(self.conversation_history.items()):
+            try:
+                messages = data.get("messages", [])
+                if now - data["last_activity"] < silence:
+                    continue
+                # лезем только в чат, где с ботом реально общались
+                if sum(1 for m in messages if m.get("role") == "user") < 5:
+                    continue
+                # последним говорил бот — не долбить в пустоту
+                if next((m for m in reversed(messages) if m.get("role") != "system"), {}).get("role") == "assistant":
+                    continue
+                if random.randint(1, 100) > self.settings.proactive_chance:
+                    continue
+
+                channel = self.bot.get_channel(channel_id)
+                if channel is None:
+                    continue
+
+                await self._send_proactive(channel, channel_id, int((now - data["last_activity"]).total_seconds() // 60))
+            except Exception:
+                logger.exception(f"Не смог вбросить сообщение в канал {channel_id}")
+
+    async def _send_proactive(self, channel, channel_id: int, silence_minutes: int):
+        """Одна реплика в тишину: по последней теме чата, без приветствий."""
+        async with self.channel_locks[channel_id]:
+            messages = list(self._get_channel_history(channel_id))
+            messages.append({
+                "role": "system",
+                "content": (
+                    f"В чате тишина уже {silence_minutes} минут. Напиши одно короткое сообщение сам: "
+                    "подколи по последней теме разговора или спроси что-то по ней. "
+                    "Без приветствий, без 'чем могу помочь', не упоминай что было тихо."
+                ),
+            })
+
+            content = ""
+            async for chunk in self._chat_completion_with_rotation(messages=messages, channel_id=channel_id):
+                content += chunk
+
+            content = fix_discord_format(content.strip()[:2000], getattr(channel, "guild", None))
+            if not content:
                 return
 
-        await self.add_random_reaction(message)
-        self.message_counter += 1
+            await channel.send(content)
+            self._add_assistant_message(channel_id, content)
+            self.reply_times[channel_id].append(datetime.now())
+            logger.info(f"Проактивное сообщение в канал {channel_id} после {silence_minutes} минут тишины")
+
+    @proactive_loop.before_loop
+    async def before_proactive_loop(self):
+        await self.bot.wait_until_ready()
+
+    @staticmethod
+    def _format_totals(totals: list[tuple[int, str, int, int]]) -> dict[int, list[str]]:
+        """Строки отчета собирает код: цифры LLM не трогает вообще."""
+        by_user: dict[int, list[str]] = {}
+        for user_id, game, seconds, sessions in totals:
+            hours = seconds / 3600
+            line = f"• {game} — {hours:.1f} ч"
+            if sessions > 1:
+                line += f" ({sessions} захода)"
+            by_user.setdefault(user_id, []).append(line)
+        return by_user
+
+    async def _report_comments(self, by_user: dict[int, list[str]], guild) -> dict[int, str]:
+        """Просит у модели только по одной подколке на человека, в JSON."""
+        facts = "\n\n".join(
+            f"user_id {user_id}:\n" + "\n".join(lines) for user_id, lines in by_user.items()
+        )
+        messages = [
+            self._get_base_system_message(guild_name=guild.name if guild else None),
+            {
+                "role": "user",
+                "content": (
+                    "Вот за сколько часов кто во что вчера играл:\n\n"
+                    f"{facts}\n\n"
+                    "Напиши на каждого по одной короткой подколке (до 15 слов), опираясь на его игры. "
+                    "Цифры не повторяй — их и так видно. "
+                    'Ответ строго в JSON: {"user_id": "подколка"}. Без текста вокруг JSON.'
+                ),
+            },
+        ]
+
+        raw = ""
+        async for chunk in self._chat_completion_with_rotation(messages=messages, channel_id=None):
+            raw += chunk
+
+        raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning(f"Отчет: модель вернула не JSON: {raw[:200]}")
+            return {}
+        return {int(k): str(v) for k, v in parsed.items() if str(k).isdigit()}
 
     @tasks.loop(seconds=30)
     async def generate_report(self):
-        """
-            Генерирует ежедневный отчет через GPT и отправляет его в основной канал.
-        """
+        """Ежедневный отчет: часы считает sql, LLM добавляет только комментарии."""
+        channel = None
         try:
             now = dt.now(TIME_ZONE)
 
@@ -604,61 +754,39 @@ class ConversationCog(commands.Cog):
 
             if self.last_report_date == today:
                 return
-        
+
             logger.info("генерация отчета")
-            report_text = await self.activity_storage.activity_info()
-            if not report_text:
-                report_text = "Сегодня активности пользователей не обнаружено."
-            channel_id = self.settings.main_chat_id
-            channel = self.bot.get_channel(channel_id)
+            channel = self.bot.get_channel(self.settings.main_chat_id)
             if not channel:
                 logger.info("Канал для отчета не найден")
                 return
 
-            messages = [self._get_base_system_message(include_mood=True, guild_name=channel.guild.name)]
+            by_user = self._format_totals(await self.activity_storage.activity_totals())
+            if not by_user:
+                await channel.send("Вчера никто никуда не заходил. Мертвый сервер.")
+                self.last_report_date = today
+                return
 
-            messages.append(self._get_emojis_system_message(channel.guild))
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"""
-        Сделай ежедневный отчет по активности пользователей. Напиши что отчет за прошлый день.
+            try:
+                comments = await self._report_comments(by_user, channel.guild)
+            except Exception as e:
+                logger.warning(f"Отчет: не смог получить комментарии: {e}")
+                comments = {}
 
-        Данные для отчета:
-        {report_text}
+            parts = ["Отчет за вчера:"]
+            for user_id, lines in by_user.items():
+                block = f"\n<@{user_id}>"
+                comment = comments.get(user_id, "").strip()
+                if comment:
+                    block += f" {fix_discord_format(comment, channel.guild)}"
+                parts.append(block + "\n" + "\n".join(lines))
 
-        Правила:
-        - Пиши как Ogurec.
-        - не выдумывай информацию. Запрещено.
-        - информацию для отчета возьми из поля данные.
-        - Отчет должен быть смешным и немного токсичным.
-        - делай упоминание пользователя по его id из данных, которые я тебе прислал перед тем как писать отчет про то, во что он играл. Упоминание в виде <@id_пользователя>(например, <@semenogka>) НЕ УДАЛЯЙ УГЛОВЫЕ СКОБКИ.
-        - Не заменяй <@ID> на @ID. 
-        - про кого то нужно говорить с негативчиком, а про кого то без негативчика.   
-        - Используй Discord эмодзи из доступного списка.
-        - Вставляй эмодзи прямо в текст.
-        - Не пиши названия эмодзи словами.
-        - Не используй Markdown таблицы.
-        - секунды переводи в часы.
-        - уложись в 2000 символов. ЭТО ОБЯЗАТЕЛЬНО.
-        - ты говоришь про каждого пользователя по порядку. Сначала про все игры одного пользователя и то сколько он часов првоел в каждой из игр, потом про следующего пользователя и так пока не закончатся все пользователи.
-        - если пользователь заходил в одну игру несколько раз, то часы нужно в этой игре нужно сложить и сказать про это в одной строке, а не в разных.
-        - Говори про всех из этого списка, никого не пропусти.
-        """,
-                }
-            )
-
-            content = ""
-
-            async for chunk in self._chat_completion_with_rotation(messages=messages, channel_id=None):
-                content += chunk
-
-            if content:
-                await channel.send(fix_discord_format(content, channel.guild))
-
+            await channel.send("\n".join(parts)[:2000])
             self.last_report_date = today
         except Exception as e:
-            await channel.send(f"Ошибка генерации отчета: {e}")
+            logger.exception(f"Ошибка генерации отчета: {e}")
+            if channel:
+                await channel.send(f"Ошибка генерации отчета: {e}")
 
     @generate_report.before_loop 
     async def before_generate_report(self): 

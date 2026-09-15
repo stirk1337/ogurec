@@ -14,6 +14,7 @@ from ogurec.cogs.utils_cog import Utils
 from ogurec.config.paths import data_file
 from ogurec.config.settings import Settings
 from ogurec.klipy import KlipyClient
+from ogurec.memory import UserMemory
 from ogurec.loldle.server import start_activity_server
 from ogurec.search import SearchService
 from ogurec.steam import SteamClient
@@ -36,13 +37,21 @@ async def amain():
         gpt_client=gpt_client,
         query_model=settings.search_query_model,
     )
+    memory = UserMemory(
+        path=str(data_file("memory.db", "memory.db")),
+        gpt_client=gpt_client,
+        model=settings.fast_model,
+        update_every=settings.memory_update_every,
+        enabled=settings.memory_enabled,
+    )
+    await memory.init()
     await gif_storage.init()
     await activity_storage.init()
     await bot.add_cog(Utils(bot))
     await bot.add_cog(Help(bot))
     await bot.add_cog(Rebrand(bot, settings))
     await bot.add_cog(GameActivity(bot, activity_storage, settings))
-    conversation_cog = ConversationCog(bot, gpt_client, gif_storage, settings, activity_storage, search_service)
+    conversation_cog = ConversationCog(bot, gpt_client, gif_storage, settings, activity_storage, search_service, memory)
     await bot.add_cog(conversation_cog)
     await bot.add_cog(PresenceGameCog(bot, klipy_client, steam_client, settings, conversation_cog))
     await bot.add_cog(Loldle(bot, activity_server))
