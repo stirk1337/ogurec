@@ -149,18 +149,22 @@ class UserMemory:
         await self.conn.commit()
         logger.info(f"Память: досье на {name} обновлено ({len(facts)} символов)")
 
-    async def rebuild_all(self, since_hours: int = 24):
-        """Ночная пересборка: только те, кто писал за последние сутки, по очереди."""
+    async def rebuild_all(self, since_hours: int | None = 24):
+        """Пересборка досье. since_hours=None — все, у кого есть сообщения в индексе."""
         if not self.enabled:
             return
 
-        async with self.conn.execute(
-            "SELECT user_id, MAX(name) FROM messages WHERE created_at > ? GROUP BY user_id",
-            (int(time.time()) - since_hours * 3600,),
-        ) as cursor:
+        if since_hours is None:
+            query = "SELECT user_id, MAX(name) FROM messages GROUP BY user_id"
+            params: tuple = ()
+        else:
+            query = "SELECT user_id, MAX(name) FROM messages WHERE created_at > ? GROUP BY user_id"
+            params = (int(time.time()) - since_hours * 3600,)
+
+        async with self.conn.execute(query, params) as cursor:
             users = await cursor.fetchall()
 
-        logger.info(f"Память: ночная пересборка досье, людей {len(users)}")
+        logger.info(f"Память: пересборка досье, людей {len(users)}")
         for user_id, name in users:
             await self.rebuild(user_id, name or str(user_id))
             await asyncio.sleep(5)  # не долбить пул провайдеров очередью подряд

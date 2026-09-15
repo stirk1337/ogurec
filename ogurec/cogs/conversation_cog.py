@@ -655,7 +655,7 @@ class ConversationCog(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True)
-        await self.memory.rebuild_all()
+        await self.memory.rebuild_all(since_hours=None)
         await interaction.followup.send("Досье пересобраны.", ephemeral=True)
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
