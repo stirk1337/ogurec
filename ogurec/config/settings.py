@@ -20,7 +20,10 @@ class Settings(BaseSettings):
     mood_hours: int = 3  # настроение держится часами, а не меняется каждый ответ
 
     memory_enabled: bool = True
-    memory_update_every: int = 15  # сообщений от юзера между пересборками досье
+    memory_rebuild_hour: int = 5  # ночная пересборка досье, до утреннего отчета
+    memory_burst_messages: int = 200  # столько сообщений за день — пересобрать не дожидаясь ночи
+    memory_history_limit: int = 300  # сколько последних сообщений уходит в пересборку
+    memory_keep_days: int = 30  # дольше сырые сообщения не храним
 
     proactive_enabled: bool = True
     proactive_silence_minutes: int = 40  # тишина, после которой бот может написать сам

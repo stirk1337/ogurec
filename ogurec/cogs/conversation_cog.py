@@ -98,8 +98,10 @@ class ConversationCog(commands.Cog):
         self.mood_until: datetime = datetime.now() + timedelta(hours=settings.mood_hours)
 
         self.last_report_date = None
+        self.last_memory_date = None
         self.generate_report.start()
         self.proactive_loop.start()
+        self.rebuild_memory.start()
 
     def _current_mood(self) -> str:
         """Настроение живет несколько часов, а не меняется от сообщения к сообщению."""
@@ -649,11 +651,35 @@ class ConversationCog(commands.Cog):
         self._ensure_system_messages(channel_id, message.guild, is_first_user_message)
         self._add_user_message(channel_id, message.content, message.author.name)
 
-        if self.memory and self.memory.note_message(message.author.id, message.author.name, message.content):
-            asyncio.create_task(self.memory.update(message.author.id, message.author.name))
+        if self.memory and await self.memory.note_message(
+            message.author.id, message.author.name, channel_id, message.content
+        ):
+            logger.info(f"Память: {message.author.name} разошелся, пересобираю досье вне очереди")
+            asyncio.create_task(self.memory.rebuild(message.author.id, message.author.name))
 
         self.pending[channel_id].append(message)
         self._schedule_batch(channel_id)
+
+    @tasks.loop(minutes=5)
+    async def rebuild_memory(self):
+        """Ночью пересобираем досье по индексу сообщений и чистим старые сообщения."""
+        if not self.memory:
+            return
+
+        now = dt.now(TIME_ZONE)
+        if now.hour != self.settings.memory_rebuild_hour or self.last_memory_date == now.date():
+            return
+
+        self.last_memory_date = now.date()
+        try:
+            await self.memory.rebuild_all()
+            await self.memory.cleanup()
+        except Exception:
+            logger.exception("Не смог пересобрать досье")
+
+    @rebuild_memory.before_loop
+    async def before_rebuild_memory(self):
+        await self.bot.wait_until_ready()
 
     @tasks.loop(minutes=5)
     async def proactive_loop(self):

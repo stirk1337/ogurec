@@ -41,7 +41,9 @@ async def amain():
         path=str(data_file("memory.db", "memory.db")),
         gpt_client=gpt_client,
         model=settings.fast_model,
-        update_every=settings.memory_update_every,
+        burst_messages=settings.memory_burst_messages,
+        history_limit=settings.memory_history_limit,
+        keep_days=settings.memory_keep_days,
         enabled=settings.memory_enabled,
     )
     await memory.init()
