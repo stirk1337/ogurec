@@ -21,9 +21,9 @@ LLM_SEARCH_SYSTEM_PROMPT = (
     "Если поиск не нужен — верни ровно одну букву N. "
     "Поиск не нужен, если это не вопрос, либо вопрос адресован боту и касается его состояния/действий "
     "(например: \"как дела\", \"что делаешь\", \"чем занят\", \"как ты\", \"как настроение\"). "
-    "Если поиск нужен — верни поисковый запрос для гугла: короткая формулировка из ключевых слов "
+    "Если поиск нужен — верни строку вида: Q: <запрос для гугла> — короткая формулировка из ключевых слов "
     "без местоимений, обращений и лишних слов, на языке сообщения. "
-    "Отвечай либо буквой N, либо только запросом, без пояснений и кавычек."
+    "Никакого текста кроме N или строки с Q:."
 )
 
 async def search_query_llm(text: str, gpt_client, model: str = "auto:fast") -> Optional[str]:
@@ -46,13 +46,19 @@ async def search_query_llm(text: str, gpt_client, model: str = "auto:fast") -> O
             logger.warning(f"search_query_llm error (попытка {attempt + 1}): {e}")
             continue
 
-        # часть моделей сливает свои рассуждения в ответ — берем последнюю строку
-        lines = [line.strip().strip('"') for line in result.splitlines() if line.strip()]
-        query = lines[-1] if lines else ""
-        logger.info(f"search_query_llm -> {query!r}")
-        if not query or query.upper() == "N" or len(query) > 200:
-            return None
-        return query
+        # модели сливают в ответ рассуждения и выдуманные диалоги, поэтому ищем маркер,
+        # а не гадаем по позиции строки
+        for line in (l.strip() for l in result.splitlines() if l.strip()):
+            if line.upper().rstrip(".") == "N":
+                logger.info("search_query_llm -> поиск не нужен")
+                return None
+            if line.upper().startswith("Q:"):
+                query = line[2:].strip().strip('"').strip()
+                logger.info(f"search_query_llm -> {query!r}")
+                return query[:200] or None
+
+        logger.info(f"search_query_llm: ответ без маркера, поиск пропускаем: {result.strip()[:80]!r}")
+        return None
 
     return None
 
