@@ -76,10 +76,6 @@ class PresenceGameCog(commands.Cog):
 
                 await channel.send(game_message)
 
-                if self.conversation_cog:
-                    channel_id = channel.id
-                    self.conversation_cog.add_assistant_message(channel_id, game_message)
-
             except Exception as e:
                 print(f"Ошибка генерации сообщения через GPT: {e}")
 

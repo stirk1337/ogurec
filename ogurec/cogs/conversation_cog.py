@@ -57,6 +57,29 @@ STYLE_EXAMPLES = """Примеры того, как ты пишешь:
 Рома: а чего Эпштейн такой известный вообще
 Ты: потому что в его записной книжке пол-Форбса и два президента. Возил их к себе на остров, а потом внезапно повесился в камере, где как раз сломались камеры. Тут любой конспиролог кончит"""
 
+def extra_system_for_reply(
+    *,
+    random_phrase: bool,
+    author_info: str = "",
+    mentioned_users_info: str = "",
+) -> str:
+    parts = []
+    if random_phrase:
+        parts.append(
+            "К тебе не обращались — ты сам влезаешь в разговор. "
+            "Ответь по теме последних сообщений, не принимай их на свой счет. "
+            "Сообщения людей подписаны именами, твои прошлые ответы — «Ты (Имя):», это к кому ты тогда говорил."
+        )
+    elif author_info:
+        parts.append(
+            f"Последнее сообщение написал {author_info}. "
+            "Это справка только про него, не про остальных в истории. "
+            "Информацию о нём используй только иногда, когда это уместно."
+        )
+    if mentioned_users_info:
+        parts.append(mentioned_users_info)
+    return " ".join(parts)
+
 
 class ConversationCog(commands.Cog):
     def __init__(
@@ -143,7 +166,9 @@ class ConversationCog(commands.Cog):
             "Пишешь без вежливых формул, заголовков и предложений помочь. Токсишь и подъебываешь, но по делу. "
             "Не пересказываешь то, что и так видно в чате, и не объясняешь свои шутки. "
             "Свои прошлые реплики видно выше — не повторяй их темы, примеры и шутки: "
-            "если про что-то уже шутил, заходи с другого, а не переписывай то же самое другими словами.\n"
+            "если про что-то уже шутил, заходи с другого, а не переписывай то же самое другими словами. "
+            "В истории чата сообщения людей записаны как «Имя: текст», "
+            "твои ответы как «Ты (Имя): текст» — имя в скобках это к кому ты тогда говорил.\n"
             f"{STYLE_EXAMPLES}\n"
         )
         content += f"Сейчас {now:%d.%m.%Y %H:%M}, сервер называется {guild_name}. "
@@ -327,18 +352,20 @@ class ConversationCog(commands.Cog):
     def _add_user_message(self, channel_id: int, content: str, user_name: str):
         """Добавить сообщение пользователя в историю."""
         history = self._get_channel_history(channel_id)
-        history.append({"role": "user", "content": content, "name": user_name})
+        # имя в тексте: поле name модели и прокси часто игнорируют, и тогда все user-реплики сливаются в одного человека
+        history.append({"role": "user", "content": f"{user_name}: {content}"})
         self._update_channel_activity(channel_id)
 
-    def _add_assistant_message(self, channel_id: int, content: str):
+    def _add_assistant_message(self, channel_id: int, content: str, reply_to: str | None = None):
         """Добавить ответ бота в историю."""
         history = self._get_channel_history(channel_id)
-        history.append({"role": "assistant", "content": content})
+        prefix = f"Ты ({reply_to}): " if reply_to else "Ты: "
+        history.append({"role": "assistant", "content": prefix + content})
         self._update_channel_activity(channel_id)
 
-    def add_assistant_message(self, channel_id: int, content: str):
+    def add_assistant_message(self, channel_id: int, content: str, reply_to: str | None = None):
         """Публичный метод для добавления ответа бота в историю."""
-        self._add_assistant_message(channel_id, content)
+        self._add_assistant_message(channel_id, content, reply_to)
 
     async def reply_with_gpt(self, message: Message, random_phrase: bool = False):
         """Ответить на сообщение вне общей очереди пачек (ручной вызов)."""
@@ -455,26 +482,19 @@ class ConversationCog(commands.Cog):
         author_info = self._get_user_info_for_gpt(message.author, message.guild)
         mentioned_users_info = self._get_mentioned_users_info(message)
 
-        info_parts = []
-        if random_phrase:
-            info_parts.append(
-                "К тебе не обращались — ты сам влезаешь в разговор. Ответь по теме последних сообщений, не принимай их на свой счет."
-            )
-        elif author_info:
-            info_parts.append(
-                f"Тебе пишет пользователь: {author_info}. Ты знаешь эту информацию о пользователе, но используй её только иногда, когда это уместно и естественно"
-            )
-        
-        if mentioned_users_info:
-            info_parts.append(mentioned_users_info)
+        extra = extra_system_for_reply(
+            random_phrase=random_phrase,
+            author_info="" if random_phrase else author_info,
+            mentioned_users_info=mentioned_users_info,
+        )
 
         # Собираем messages для GPT: системные сообщения + хвост разговора.
         # Весь час истории гнать нельзя: бот начинает переписывать сам себя по кругу
         system_messages = [m for m in history if m.get("role") == "system"]
         talk = [m for m in history if m.get("role") != "system"][-HISTORY_MESSAGES_LIMIT:]
         messages_for_gpt = system_messages + talk
-        if info_parts:
-            messages_for_gpt.append({"role": "system", "content": " ".join(info_parts)})
+        if extra:
+            messages_for_gpt.append({"role": "system", "content": extra})
         if search_context:
             search_msg = {
                 "role": "system",
@@ -516,7 +536,10 @@ class ConversationCog(commands.Cog):
                 
                 # Добавить ответ бота в историю
                 if content:
-                    self._add_assistant_message(channel_id, fix_discord_format(content, message.guild))
+                    speaker = message.author.display_name or message.author.name
+                    self._add_assistant_message(
+                        channel_id, fix_discord_format(content, message.guild), reply_to=speaker
+                    )
 
                     # С шансом 5% отправить случайный стикер с сервера
                     if message.guild and message.guild.stickers and random.randint(1, 100) <= 25:
@@ -711,7 +734,8 @@ class ConversationCog(commands.Cog):
         history = self._get_channel_history(channel_id)
         is_first_user_message = not any(msg.get("role") == "user" for msg in history)
         self._ensure_system_messages(channel_id, message.guild, is_first_user_message)
-        self._add_user_message(channel_id, message.content, message.author.name)
+        speaker = message.author.display_name or message.author.name
+        self._add_user_message(channel_id, message.content, speaker)
 
         if self.memory and await self.memory.note_message(
             message.author.id,
