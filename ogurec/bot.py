@@ -3,6 +3,7 @@ from discord.ext import commands
 from loguru import logger
 
 from ogurec.config.settings import Settings
+from ogurec.slash_sync import sync_slash_commands
 
 
 class OgurecBot(commands.Bot):
@@ -18,6 +19,14 @@ class OgurecBot(commands.Bot):
             command_prefix=settings.prefix,
             intents=intents,
         )
+
+    async def setup_hook(self):
+        try:
+            synced = await sync_slash_commands(self)
+            names = ", ".join(f"/{cmd.name}" for cmd in synced) or "пусто"
+            logger.info(f"Синхронизировано {len(synced)} команд: {names}")
+        except Exception:
+            logger.exception("Не смог синхронизировать slash-команды")
 
     async def on_ready(self):
         logger.info(f"We have logged in as {self.user}")

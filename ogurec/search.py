@@ -7,6 +7,7 @@ import urllib.request
 from typing import Optional
 
 from loguru import logger
+from pydantic import BaseModel, Field
 
 SEARXNG_BASE = "https://searxng.stirk1337.ru"
 SEARXNG_TIMEOUT = 15
@@ -18,13 +19,18 @@ VIDEO_BLOCKLIST = (
 
 LLM_SEARCH_SYSTEM_PROMPT = (
     "Ты решаешь, нужен ли веб-поиск для сообщения пользователя. "
-    "Если поиск не нужен — верни ровно одну букву N. "
     "Поиск не нужен, если это не вопрос, либо вопрос адресован боту и касается его состояния/действий "
     "(например: \"как дела\", \"что делаешь\", \"чем занят\", \"как ты\", \"как настроение\"). "
-    "Если поиск нужен — верни поисковый запрос для гугла: короткая формулировка из ключевых слов "
-    "без местоимений, обращений и лишних слов, на языке сообщения. "
-    "Отвечай либо буквой N, либо только запросом, без пояснений и кавычек."
+    "Если поиск нужен — сформулируй запрос для гугла: короткая формулировка из ключевых слов "
+    "без местоимений, обращений и лишних слов, на языке сообщения."
 )
+
+
+class SearchDecision(BaseModel):
+    # описания на английском: pydantic экранирует кириллицу в схеме в \\uXXXX, мелкие модели такое не читают
+    need_search: bool = Field(description="whether a web search is needed")
+    query: str | None = Field(default=None, description="google query in the message language, if search is needed")
+
 
 async def search_query_llm(text: str, gpt_client, model: str = "auto:fast") -> Optional[str]:
     """
@@ -32,22 +38,25 @@ async def search_query_llm(text: str, gpt_client, model: str = "auto:fast") -> O
     """
     if not text or not text.strip() or gpt_client is None:
         return None
-    messages = [
-        {"role": "system", "content": LLM_SEARCH_SYSTEM_PROMPT},
-        {"role": "user", "content": text[:500]},
-    ]
-    try:
-        result = ""
-        async for chunk in gpt_client.chat_completion(messages, temperature=0, max_tokens=64, model=model):
-            result += chunk
-        query = result.strip().strip('"').strip()
-        logger.info(f"search_query_llm -> {query!r}")
-        if not query or query.upper() == "N":
+
+    # пул провайдеров флапает: первая попытка часто ловит 502/429, вторая уходит к живому
+    for attempt in range(2):
+        try:
+            decision = await gpt_client.structured(
+                LLM_SEARCH_SYSTEM_PROMPT, text[:500], SearchDecision, model=model
+            )
+        except Exception as e:
+            logger.warning(f"search_query_llm error (попытка {attempt + 1}): {e}")
+            continue
+
+        query = (decision.query or "").strip()
+        logger.info(f"search_query_llm -> need_search={decision.need_search} query={query!r}")
+        if not decision.need_search or not query:
             return None
-        return query[:300]
-    except Exception as e:
-        logger.warning(f"search_query_llm error: {e}")
-        return None
+        return query[:200]
+
+    return None
+
 
 def _is_blocked_url(url: str) -> bool:
     u = url.lower()
