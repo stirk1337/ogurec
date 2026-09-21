@@ -313,6 +313,13 @@ class ConversationCog(commands.Cog):
 
         # Добавить сообщение пользователя в историю
         self._add_user_message(channel_id, message.content, message.author.name)
+        history = self._get_channel_history(channel_id)
+
+        # сообщение, на которое ответили reply-ем: без него бот не видит, о чем речь
+        ref = message.reference.resolved if message.reference else None
+        reply_info = ""
+        if isinstance(ref, discord.Message) and ref.content:
+            reply_info = f"Это ответ на сообщение {ref.author.display_name}: \"{ref.content[:500]}\""
 
         has_user_mention = any(
             not u.bot and u.id != self.bot.user.id
@@ -323,7 +330,12 @@ class ConversationCog(commands.Cog):
         if has_user_mention:
             logger.info("search skipped: user mention detected")
         else:
-            search_query = await self.search_service.search_query(message.content)
+            # пара прошлых реплик, чтобы поиск раскрывал "он", "а сколько стоит?"
+            recent = [m for m in history[:-1] if m.get("role") != "system"][-3:]
+            context = "\n".join(f"{m.get('name', 'Ogurec')}: {m['content']}" for m in recent)
+            if reply_info:
+                context += f"\n{reply_info}"
+            search_query = await self.search_service.search_query(message.content, context)
             if search_query:
                 try:
                     logger.info(f"search triggered: {search_query}")
@@ -335,9 +347,6 @@ class ConversationCog(commands.Cog):
                 except Exception as e:
                     logger.warning(f"search error: {e}")
 
-        # Получить историю для этого канала с системными сообщениями
-        history = self._get_channel_history(channel_id)
-        
         # Добавляем информацию об авторе сообщения и упомянутых пользователях в одно сообщение
         author_info = self._get_user_info_for_gpt(message.author, message.guild)
         mentioned_users_info = self._get_mentioned_users_info(message)
@@ -355,13 +364,15 @@ class ConversationCog(commands.Cog):
         if mentioned_users_info:
             info_parts.append(mentioned_users_info)
 
-        if info_parts:
-            combined_info_message = {"role": "user", "content": " ".join(info_parts), "name":message.author.name}
-            # Вставляем перед последним сообщением пользователя
-            history.insert(-1, combined_info_message)
+        if reply_info:
+            info_parts.append(reply_info)
 
-        # Собираем messages для GPT: история + временный контекст поиска (не сохраняем в историю)
-        messages_for_gpt = history
+        # служебное и поиск идут только в этот запрос: в истории они копились и раздували контекст до 429
+        messages_for_gpt = history[:-1]
+        if info_parts:
+            # перед последним сообщением пользователя
+            messages_for_gpt.append({"role": "user", "content": " ".join(info_parts), "name": message.author.name})
+        messages_for_gpt.append(history[-1])
         if search_context:
             search_msg = {
                 "role": "system",
@@ -373,7 +384,7 @@ class ConversationCog(commands.Cog):
                     "Если твой овтет основан на данных поиска, то не пиши, что этот ответ сгенерирован на данных из поиска. Если ответа из поиска не нашлось, то отправь ссылку на ккакой-то из сайтов."
                 ),
             }
-            messages_for_gpt += [search_msg]
+            messages_for_gpt.append(search_msg)
         
         # Отправляем пустое сообщение-плейсхолдер с ответом на сообщение пользователя
         sent_message = await message.channel.send("💬 ...", reference=message)
@@ -478,22 +489,21 @@ class ConversationCog(commands.Cog):
             await asyncio.sleep(random.randint(1, 4))
             await message.add_reaction(random.choice(message.guild.emojis))
 
-    def _remove_topmost_non_system_message(self, channel_id: int) -> bool:
+    def _remove_topmost_non_system_message(self, channel_id: int) -> dict | None:
         """
         Удаляет самое верхнее несистемное сообщение из истории чата.
-        Возвращает True, если сообщение было удалено, False если несистемных сообщений не осталось.
+        Возвращает удаленное сообщение или None, если несистемных сообщений не осталось.
         """
         history = self._get_channel_history(channel_id)
 
         # Ищем первое несистемное сообщение
         for i, msg in enumerate(history):
             if msg.get("role") != "system":
-                history.pop(i)
                 logger.info(f"Removed topmost non-system message from history (channel {channel_id})")
-                return True
+                return history.pop(i)
 
         # Если несистемных сообщений нет
-        return False
+        return None
 
     async def _chat_completion_with_rotation(
         self,
@@ -527,9 +537,10 @@ class ConversationCog(commands.Cog):
                 logger.exception(f"Non-429 error, {e}")
 
             if e_429 and last_error:
-                if channel_id and self._remove_topmost_non_system_message(channel_id):
-                    # Обновляем список сообщений после удаления
-                    messages = self._get_channel_history(channel_id)
+                removed = self._remove_topmost_non_system_message(channel_id) if channel_id else None
+                if removed:
+                    # убираем то же сообщение из запроса, а не перечитываем историю: так сохранятся поиск и инфо о юзере
+                    messages = [m for m in messages if m is not removed]
                     logger.info(f"Retrying after removing message (attempt {retry_attempt + 1})")
                     continue
                 else:

@@ -32,18 +32,23 @@ class SearchDecision(BaseModel):
     query: str | None = Field(default=None, description="google query in the message language, if search is needed")
 
 
-async def search_query_llm(text: str, gpt_client, model: str = "auto:fast") -> Optional[str]:
+async def search_query_llm(text: str, gpt_client, model: str = "auto:fast", context: str = "") -> Optional[str]:
     """
     Один запрос в LLM: либо None (поиск не нужен), либо перефразированный запрос для поиска.
+    context — предыдущие реплики, чтобы раскрыть "он", "а сколько стоит?" и т.п.
     """
     if not text or not text.strip() or gpt_client is None:
         return None
+
+    prompt = text[:500]
+    if context:
+        prompt = f"Предыдущие сообщения чата (только для понимания, о чем речь):\n{context[-1500:]}\n\nСообщение: {prompt}"
 
     # пул провайдеров флапает: первая попытка часто ловит 502/429, вторая уходит к живому
     for attempt in range(2):
         try:
             decision = await gpt_client.structured(
-                LLM_SEARCH_SYSTEM_PROMPT, text[:500], SearchDecision, model=model
+                LLM_SEARCH_SYSTEM_PROMPT, prompt, SearchDecision, model=model
             )
         except Exception as e:
             logger.warning(f"search_query_llm error (попытка {attempt + 1}): {e}")
@@ -168,11 +173,11 @@ class SearchService:
         self.gpt_client = gpt_client
         self.query_model = query_model
 
-    async def search_query(self, text: str) -> Optional[str]:
+    async def search_query(self, text: str, context: str = "") -> Optional[str]:
         """Запрос для поиска или None, если поиск не нужен."""
         if not self.enabled:
             return None
-        return await search_query_llm(text, self.gpt_client, self.query_model)
+        return await search_query_llm(text, self.gpt_client, self.query_model, context)
 
     async def search(self, text: str) -> Optional[str]:
         if not self.enabled:
