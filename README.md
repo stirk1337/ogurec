@@ -16,10 +16,6 @@ Ogurec запускает **LoLdle как Activity** и ведёт общее т
 
 ## Запуск
 
-<p align="center">
-  <img src="./assets/readme/section-run.svg" width="100%" alt="Запуск через Docker или uv">
-</p>
-
 Вам понадобятся Python 3.14+, Discord-приложение с Activity и ключи из [таблицы переменных](#переменные-среды). Шаблон лежит в [`.env.example`](.env.example).
 
 **Docker** — основной путь:
@@ -46,10 +42,6 @@ uv run ogurec
 
 ## LoLdle
 
-<p align="center">
-  <img src="./assets/readme/section-loldle.svg" width="100%" alt="LoLdle в канале: пять клеток прогресса">
-</p>
-
 Кнопка **Играть** открывает Discord Activity. Режимов пять: классика, цитата, умение, эмодзи и сплеш. Прогресс каждого игрока попадает в общее табло канала, а сутки считаются по Парижу.
 
 - В полночь бот фиксирует итоги дня.
@@ -57,10 +49,6 @@ uv run ogurec
 - Свою статистику можно сбросить прямо в Activity. Сброс стирает её из Discord, картинок в чате, cookies и localStorage.
 
 ## Чат и сервер
-
-<p align="center">
-  <img src="./assets/readme/section-chat.svg" width="100%" alt="Чат с историей канала">
-</p>
 
 - Отвечает на любое упоминание. Видит текст сообщения, на которое вы ответили reply-ем.
 - Иногда встревает в разговор сам.
@@ -84,15 +72,15 @@ Presence раз в час берёт случайную игру из Steam-би
 
 ## Как устроен
 
-<p align="center">
-  <img src="./assets/readme/workflow.svg" width="100%" alt="Discord-канал идёт в Ogurec и расходится в LoLdle Activity, LLM-чат и Steam-presence">
-</p>
-
 Сообщение или нажатие кнопки в Discord приходит в бота. Дальше работают три независимых контура:
 
-1. LoLdle Activity с табло в чате.
-2. LLM с памятью разговора и веб-поиском.
-3. Steam-presence с игрой из библиотеки.
+```mermaid
+flowchart LR
+    D[Discord-канал] --> B[Ogurec]
+    B --> L[LoLdle Activity<br/>табло в чате]
+    B --> C[LLM<br/>память разговора и веб-поиск]
+    B --> S[Steam-presence<br/>игра из библиотеки]
+```
 
 История чата хранится в памяти и пропадает при рестарте. LoLdle, GIF и игровые сессии пишутся на диск.
 
