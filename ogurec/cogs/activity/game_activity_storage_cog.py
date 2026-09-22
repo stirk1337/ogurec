@@ -97,28 +97,40 @@ class ActivityStorage:
         logger.info(f"Перед удалением активности: {before[0]}, после удаления активности: {after[0]}")
 
     async def activity_info(self):
+        # время считает sql, а не LLM: иначе модель расписывает сложение секунд прямо в отчете
+        # незакрытая сессия (играет до сих пор) считается до текущего момента
         async with self.conn.execute(
             """
             SELECT
                 user_id,
                 game,
-                started_at,
-                ended_at,
-                duration
+                SUM(COALESCE(duration, CAST(strftime('%s', 'now') AS INTEGER) - started_at)) AS total
             FROM activity
-            ORDER BY started_at
+            GROUP BY user_id, game
+            ORDER BY user_id, total DESC
             """
         ) as cursor:
             rows = await cursor.fetchall()
 
-        content = ""
+        by_user: dict[int, list[tuple[str, int]]] = {}
+        for user_id, game, total in rows:
+            by_user.setdefault(user_id, []).append((game, total))
 
-        for user_id, game, started_at, ended_at, duration in rows:
-            content += (
-                f"Пользователь {user_id} играл в {game}. "
-                f"Начал: {started_at}. "
-                f"Закончил: {ended_at}. "
-                f"Длительность: {duration} сек.\n"
-            )
+        lines = []
+        for user_id, games in by_user.items():
+            lines.append(f"<@{user_id}> — всего {_human_duration(sum(t for _, t in games))}")
+            lines.extend(f"- {game} — {_human_duration(total)}" for game, total in games)
 
-        return content
+        if by_user:
+            lines.append(f"Всего на сервере: {_human_duration(sum(t for _, _, t in rows))}")
+
+        return "\n".join(lines)
+
+
+def _human_duration(seconds: int) -> str:
+    if seconds < 60:
+        return "меньше минуты"
+    hours, minutes = divmod(seconds // 60, 60)
+    if not hours:
+        return f"{minutes} мин"
+    return f"{hours} ч {minutes} мин" if minutes else f"{hours} ч"

@@ -10,6 +10,9 @@ from ogurec.cogs.activity.game_activity_storage_cog import ActivityStorage
 from ogurec.config.settings import Settings
 from ogurec.utils import TIME_ZONE
 
+# не отслеживаем и не пишем в отчет
+IGNORED_GAMES = {"Wordle", "Ogurec Games"}
+
 
 class GameActivity(commands.Cog):
     def __init__(self, bot: OgurecBot, activity_storage: ActivityStorage, settings: Settings):
@@ -23,7 +26,7 @@ class GameActivity(commands.Cog):
 
     def get_game(self, member: discord.Member) -> str | None:
         for activity in member.activities:
-            if activity.type == discord.ActivityType.playing:
+            if activity.type == discord.ActivityType.playing and activity.name not in IGNORED_GAMES:
                 return activity.name
 
     @commands.Cog.listener()
